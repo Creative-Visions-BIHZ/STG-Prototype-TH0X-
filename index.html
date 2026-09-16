@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#100c20" />
+    <title>Starfall Shrine — STG Prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <header class="masthead">
+        <div class="eyebrow">A tiny danmaku prototype</div>
+        <h1>STARFALL <span>SHRINE</span></h1>
+      </header>
+
+      <section class="arcade-layout" aria-label="Starfall Shrine game">
+        <div class="canvas-wrap">
+          <canvas id="game" width="480" height="720" aria-label="Game canvas"></canvas>
+          <div class="scanlines" aria-hidden="true"></div>
+          <div id="overlay" class="overlay">
+            <div class="seal">✦</div>
+            <p id="overlay-kicker" class="overlay-kicker">The night is restless</p>
+            <h2 id="overlay-title">Ready?</h2>
+            <p id="overlay-copy">Weave through the spellstorm.<br />Clear every spirit in your path.</p>
+            <button id="start-button" type="button">Begin flight <span>J</span></button>
+          </div>
+        </div>
+
+        <aside class="status-panel">
+          <div class="stat top-stat">
+            <span>Score</span>
+            <strong id="score">0000000</strong>
+          </div>
+          <div class="stat">
+            <span>High score</span>
+            <strong id="high-score">0000000</strong>
+          </div>
+
+          <div class="divider"><i></i><b>✦</b><i></i></div>
+
+          <div class="stat split-stat">
+            <span>Lives</span>
+            <strong id="lives" aria-label="3 lives">◆ ◆ ◆</strong>
+          </div>
+          <div class="stat split-stat">
+            <span>Graze</span>
+            <strong id="graze">000</strong>
+          </div>
+
+          <div class="divider"><i></i><b>✦</b><i></i></div>
+
+          <div class="controls-card">
+            <h3>How to play</h3>
+            <dl>
+              <div><dt>W A S D</dt><dd>Move</dd></div>
+              <div><dt>J</dt><dd>Shoot</dd></div>
+              <div><dt>Shift</dt><dd>Focus</dd></div>
+              <div><dt>Esc</dt><dd>Pause</dd></div>
+            </dl>
+          </div>
+
+          <p class="hint">Hold focus for precise movement and to reveal your hitbox.</p>
+        </aside>
+      </section>
+
+      <section class="touch-controls" aria-label="Touch controls">
+        <div class="d-pad">
+          <button data-key="KeyW" aria-label="Move up">▲</button>
+          <button data-key="KeyA" aria-label="Move left">◀</button>
+          <button data-key="KeyS" aria-label="Move down">▼</button>
+          <button data-key="KeyD" aria-label="Move right">▶</button>
+        </div>
+        <button class="fire-button" data-key="KeyJ">FIRE</button>
+      </section>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>
