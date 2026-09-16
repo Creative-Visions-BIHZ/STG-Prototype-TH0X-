@@ -36,6 +36,11 @@ Then visit `http://localhost:8080`.
 
 Touch controls appear automatically on narrow screens.
 
+## Shot styles
+
+- **Type A — Reimu:** standard movement and wider, lower-damage shots. Power tiers add homing missiles; higher tiers launch them faster and eventually in pairs.
+- **Type B — Marisa:** 50% faster movement, bullet speed, and firing rate with narrow full-damage shots. Power tiers add piercing laser pulses that widen and split into twin beams.
+
 ## Project structure
 
 - `index.html` — accessible game shell and HUD

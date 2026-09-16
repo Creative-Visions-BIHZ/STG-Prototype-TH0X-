@@ -21,9 +21,17 @@
           <div id="overlay" class="overlay">
             <div class="seal">✦</div>
             <p id="overlay-kicker" class="overlay-kicker">The night is restless</p>
-            <h2 id="overlay-title">Ready?</h2>
-            <p id="overlay-copy">Weave through the spellstorm.<br />Clear every spirit in your path.</p>
-            <button id="start-button" type="button">Begin flight <span>Z</span></button>
+            <h2 id="overlay-title">Choose a style</h2>
+            <p id="overlay-copy">Two approaches to the same spellstorm.</p>
+            <div id="choice-buttons" class="choice-buttons">
+              <button type="button" data-character="reimu">
+                <span class="choice-key">A</span><b>Reimu</b><small>Wide · homing missiles</small>
+              </button>
+              <button type="button" data-character="marisa">
+                <span class="choice-key">B</span><b>Marisa</b><small>Fast · piercing lasers</small>
+              </button>
+            </div>
+            <button id="continue-button" class="single-action hidden" type="button">Continue <span>Esc</span></button>
           </div>
         </div>
 
@@ -58,6 +66,10 @@
           <div class="stat split-stat">
             <span>Rank</span>
             <strong id="rank">Ⅰ</strong>
+          </div>
+          <div class="stat split-stat">
+            <span>Style</span>
+            <strong id="style">—</strong>
           </div>
 
           <div class="divider"><i></i><b>✦</b><i></i></div>
