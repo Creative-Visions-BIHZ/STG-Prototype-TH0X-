@@ -145,12 +145,16 @@ dd { margin: 0; color: #aaa1b2; font-size: 9px; }
 
 .touch-controls { display: none; justify-content: space-between; align-items: center; margin-top: 16px; }
 .d-pad { display: grid; grid-template: repeat(3, 38px) / repeat(3, 38px); gap: 3px; }
-.d-pad button, .fire-button { border: 1px solid #746985; color: white; background: #201a2d; touch-action: none; }
+.d-pad button, .fire-button, .bomb-button { border: 1px solid #746985; color: white; background: #201a2d; touch-action: none; }
 .d-pad button:nth-child(1) { grid-area: 1 / 2; }
 .d-pad button:nth-child(2) { grid-area: 2 / 1; }
 .d-pad button:nth-child(3) { grid-area: 2 / 2; }
 .d-pad button:nth-child(4) { grid-area: 2 / 3; }
-.fire-button { width: 82px; height: 82px; border-radius: 50%; border-color: var(--red); color: var(--red); font: 600 11px "SFMono-Regular", Consolas, monospace; }
+.action-buttons { display: flex; align-items: end; gap: 10px; }
+.fire-button, .bomb-button { border-radius: 50%; font: 700 16px "SFMono-Regular", Consolas, monospace; }
+.fire-button { width: 82px; height: 82px; border-color: var(--red); color: var(--red); }
+.bomb-button { width: 59px; height: 59px; border-color: var(--gold); color: var(--gold); }
+.action-buttons small { font-size: 7px; letter-spacing: .08em; }
 
 @media (max-width: 700px) {
   body { display: block; padding: 15px; }

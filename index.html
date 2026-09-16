@@ -23,7 +23,7 @@
             <p id="overlay-kicker" class="overlay-kicker">The night is restless</p>
             <h2 id="overlay-title">Ready?</h2>
             <p id="overlay-copy">Weave through the spellstorm.<br />Clear every spirit in your path.</p>
-            <button id="start-button" type="button">Begin flight <span>J</span></button>
+            <button id="start-button" type="button">Begin flight <span>Z</span></button>
           </div>
         </div>
 
@@ -47,20 +47,33 @@
             <span>Graze</span>
             <strong id="graze">000</strong>
           </div>
+          <div class="stat split-stat">
+            <span>Power</span>
+            <strong id="power">P 0.00</strong>
+          </div>
+          <div class="stat split-stat">
+            <span>Bombs</span>
+            <strong id="bombs">● ●</strong>
+          </div>
+          <div class="stat split-stat">
+            <span>Rank</span>
+            <strong id="rank">Ⅰ</strong>
+          </div>
 
           <div class="divider"><i></i><b>✦</b><i></i></div>
 
           <div class="controls-card">
             <h3>How to play</h3>
             <dl>
-              <div><dt>W A S D</dt><dd>Move</dd></div>
-              <div><dt>J</dt><dd>Shoot</dd></div>
+              <div><dt>Arrows / WASD</dt><dd>Move</dd></div>
+              <div><dt>Z / J</dt><dd>Shoot</dd></div>
+              <div><dt>X</dt><dd>Bomb</dd></div>
               <div><dt>Shift</dt><dd>Focus</dd></div>
               <div><dt>Esc</dt><dd>Pause</dd></div>
             </dl>
           </div>
 
-          <p class="hint">Hold focus for precise movement and to reveal your hitbox.</p>
+          <p class="hint">Hold focus for precise movement. White round cores are dangerous; upright square items are safe.</p>
         </aside>
       </section>
 
@@ -71,7 +84,10 @@
           <button data-key="KeyS" aria-label="Move down">▼</button>
           <button data-key="KeyD" aria-label="Move right">▶</button>
         </div>
-        <button class="fire-button" data-key="KeyJ">FIRE</button>
+        <div class="action-buttons">
+          <button class="bomb-button" data-action="bomb">X<br><small>BOMB</small></button>
+          <button class="fire-button" data-key="KeyZ">Z<br><small>FIRE</small></button>
+        </div>
       </section>
     </main>
 
