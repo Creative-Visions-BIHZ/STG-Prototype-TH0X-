@@ -27,6 +27,16 @@
             <p id="overlay-kicker" class="overlay-kicker">The night is restless</p>
             <h2 id="overlay-title">Choose a style</h2>
             <p id="overlay-copy">Two approaches to the same spellstorm.</p>
+            <div id="difficulty-buttons" class="difficulty-buttons" aria-label="Difficulty">
+              <button type="button" data-difficulty="easy">Easy</button>
+              <button type="button" data-difficulty="normal" class="active">Normal</button>
+              <button type="button" data-difficulty="hard">Hard</button>
+              <button type="button" data-difficulty="lunatic">Lunatic</button>
+            </div>
+            <label id="simulation-option" class="simulation-option">
+              <input id="sync-simulation" type="checkbox" />
+              <span>FPS-synced slowdown</span>
+            </label>
             <div id="choice-buttons" class="choice-buttons">
               <button type="button" data-character="reimu">
                 <span class="choice-key">A</span><b>Reimu</b><small>Wide · homing missiles</small>
@@ -74,6 +84,22 @@
           <div class="stat split-stat">
             <span>Style</span>
             <strong id="style">—</strong>
+          </div>
+          <div class="stat split-stat">
+            <span>Difficulty</span>
+            <strong id="difficulty">NORMAL</strong>
+          </div>
+          <div class="stat split-stat perf-stat">
+            <span>Simulation</span>
+            <strong id="simulation-mode">FIXED 60 HZ</strong>
+          </div>
+          <div class="stat split-stat perf-stat">
+            <span>FPS</span>
+            <strong id="fps">—</strong>
+          </div>
+          <div class="stat split-stat perf-stat">
+            <span>Workload</span>
+            <strong id="workload">0% · 0 obj</strong>
           </div>
 
           <div class="divider"><i></i><b>✦</b><i></i></div>

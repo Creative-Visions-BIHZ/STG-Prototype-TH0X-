@@ -12,12 +12,20 @@
     bombs: document.querySelector("#bombs"),
     rank: document.querySelector("#rank"),
     style: document.querySelector("#style"),
+    difficulty: document.querySelector("#difficulty"),
+    simulationMode: document.querySelector("#simulation-mode"),
+    fps: document.querySelector("#fps"),
+    workload: document.querySelector("#workload"),
     overlay: document.querySelector("#overlay"),
     kicker: document.querySelector("#overlay-kicker"),
     title: document.querySelector("#overlay-title"),
     copy: document.querySelector("#overlay-copy"),
     choices: document.querySelector("#choice-buttons"),
     choiceButtons: document.querySelectorAll("[data-character]"),
+    difficultyButtons: document.querySelectorAll("[data-difficulty]"),
+    difficultyPanel: document.querySelector("#difficulty-buttons"),
+    simulationOption: document.querySelector("#simulation-option"),
+    syncSimulation: document.querySelector("#sync-simulation"),
     continueButton: document.querySelector("#continue-button"),
     bossHud: document.querySelector("#boss-hud"),
     bossName: document.querySelector("#boss-name"),
@@ -29,11 +37,18 @@
   const H = canvas.height;
   // Enough for a readable bullet screen, but bounded for an educational demo.
   // Raise this only after adding object pooling and profiling the renderer.
-  const MAX_ENEMY_BULLETS = 128;
   const MAX_PLAYER_BULLETS = 96;
+  const FIXED_STEP = 1 / 60;
+  const MAX_SIMULATION_STEPS = 5;
   const SHIPS = {
     reimu: { label: "A · REIMU", moveSpeed: 245, focusSpeed: 145, bulletSpeed: 1, cooldown: .085, bulletRadius: 5.5, bulletWidth: 7, damage: .68 },
     marisa: { label: "B · MARISA", moveSpeed: 367.5, focusSpeed: 217.5, bulletSpeed: 1.5, cooldown: .085 / 1.5, bulletRadius: 3.5, bulletWidth: 3, damage: 1 }
+  };
+  const DIFFICULTIES = {
+    easy: { label: "EASY", maxBullets: 80, countBonus: -3, size: .82, speed: .88, interval: 1.3, sweepLayers: 1, fanCount: 1 },
+    normal: { label: "NORMAL", maxBullets: 128, countBonus: 0, size: 1, speed: 1, interval: 1, sweepLayers: 2, fanCount: 3 },
+    hard: { label: "HARD", maxBullets: 170, countBonus: 2, size: 1.18, speed: 1.08, interval: .86, sweepLayers: 3, fanCount: 5 },
+    lunatic: { label: "LUNATIC", maxBullets: 220, countBonus: 4, size: 1.42, speed: 1.16, interval: .72, sweepLayers: 4, fanCount: 7 }
   };
   const STAGE_PROFILE = globalThis.STG_STAGE.events;
   const SPELL_CARDS = globalThis.STG_STAGE.spellCards;
@@ -48,6 +63,16 @@
 
   let state = "menu";
   let lastTime = 0;
+  let simulationAccumulator = 0;
+  let selectedDifficulty = "normal";
+  let difficulty = "normal";
+  let frameSyncedSimulation = false;
+  let performanceLastFrame = 0;
+  let performanceElapsedTime = 0;
+  let performanceFrameCount = 0;
+  let performanceBusyTime = 0;
+  let performanceWorstFrame = 0;
+  let performanceMissedFrames = 0;
   let elapsed = 0;
   let stageTime = 0;
   let stageEventIndex = 0;
@@ -81,8 +106,50 @@
 
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
   const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  const circlesOverlap = (a, b, radius) => {
+    const dx = a.x - b.x;
+    if (Math.abs(dx) > radius) return false;
+    const dy = a.y - b.y;
+    return Math.abs(dy) <= radius && dx * dx + dy * dy < radius * radius;
+  };
   const pad = n => Math.floor(n).toString().padStart(7, "0");
   const difficultyRank = () => Math.min(5, 1 + Math.floor(elapsed / 28));
+
+  function activeObjectCount() {
+    return enemies.length + playerBullets.length + missiles.length + lasers.length +
+      enemyBullets.length + items.length + particles.length + clearWaves.length + (boss ? 1 : 0);
+  }
+
+  function updatePerformanceDisplay(frameTimestamp, busyTime) {
+    if (!performanceLastFrame) {
+      performanceLastFrame = frameTimestamp;
+      return;
+    }
+
+    const frameInterval = frameTimestamp - performanceLastFrame;
+    performanceLastFrame = frameTimestamp;
+    performanceElapsedTime += frameInterval;
+    performanceFrameCount++;
+    performanceBusyTime += busyTime;
+    performanceWorstFrame = Math.max(performanceWorstFrame, frameInterval);
+    performanceMissedFrames += Math.max(0, Math.round(frameInterval / (1000 / 60)) - 1);
+    if (performanceElapsedTime < 500) return;
+
+    const fps = performanceFrameCount * 1000 / performanceElapsedTime;
+    const averageFrameTime = performanceElapsedTime / performanceFrameCount;
+    const averageBusyTime = performanceBusyTime / performanceFrameCount;
+    const workload = Math.min(999, performanceBusyTime / performanceElapsedTime * 100);
+    ui.fps.textContent = fps.toFixed(2);
+    ui.workload.textContent = `${Math.round(workload)}% · ${activeObjectCount()} obj`;
+    ui.workload.title = `${averageBusyTime.toFixed(2)} ms average game-thread time per frame`;
+    ui.fps.title = `${averageFrameTime.toFixed(2)} ms average · ${performanceWorstFrame.toFixed(2)} ms worst · ${performanceMissedFrames} estimated missed 60 Hz frames`;
+
+    performanceElapsedTime = 0;
+    performanceFrameCount = 0;
+    performanceBusyTime = 0;
+    performanceWorstFrame = 0;
+    performanceMissedFrames = 0;
+  }
 
   function takeFrom(pool) {
     return pool.pop() || {};
@@ -120,6 +187,15 @@
   const activeItem = item => !item.collected && item.y < H + 25;
   const activeClearWave = wave => wave.life > 0;
 
+  const difficultySettings = () => DIFFICULTIES[difficulty];
+  const adjustedBulletCount = (base, minimum = 1) => Math.max(minimum, base + difficultySettings().countBonus);
+  const bossFanCount = base => difficulty === "easy" ? 1 : base + difficultySettings().countBonus;
+
+  function emitFan(centerAngle, count, spacing, emit) {
+    const middle = (count - 1) / 2;
+    for (let index = 0; index < count; index++) emit(centerAngle + (index - middle) * spacing);
+  }
+
   function addPlayerShot(x, y, vx, vy, ship) {
     if (playerBullets.length >= MAX_PLAYER_BULLETS) return;
     playerBullets.push(Object.assign(takeFrom(pools.playerBullets), {
@@ -128,10 +204,13 @@
     }));
   }
 
-  function resetGame(character) {
+  function resetGame(character, chosenDifficulty = selectedDifficulty) {
     elapsed = stageTime = score = graze = shake = bombWave = 0;
     stageEventIndex = 0;
     boss = null;
+    difficulty = chosenDifficulty;
+    frameSyncedSimulation = ui.syncSimulation.checked;
+    simulationAccumulator = 0;
     ui.bossHud.classList.add("hidden");
     lives = 3;
     power = 0;
@@ -161,6 +240,8 @@
     ui.bombs.textContent = bombs > 0 ? Array(bombs).fill("●").join(" ") : "—";
     ui.rank.textContent = ["Ⅰ", "Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ"][difficultyRank()];
     ui.style.textContent = player ? SHIPS[player.character].label : "—";
+    ui.difficulty.textContent = DIFFICULTIES[difficulty].label;
+    ui.simulationMode.textContent = frameSyncedSimulation ? "FPS SYNC" : "FIXED 60 HZ";
   }
 
   function spawnEnemy(forcedType, x = 45 + Math.random() * (W - 90), y = -28) {
@@ -212,41 +293,43 @@
   }
 
   function shootEnemy(enemy) {
-    if (enemyBullets.length >= MAX_ENEMY_BULLETS) return;
+    const settings = difficultySettings();
+    if (enemyBullets.length >= settings.maxBullets) return;
     const angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
     const speed = 105 + Math.min(45, elapsed * .5);
     const rank = difficultyRank();
     enemy.volley++;
     const addBullet = (shotAngle, shotSpeed, kind) => {
-      if (enemyBullets.length < MAX_ENEMY_BULLETS) {
+      if (enemyBullets.length < settings.maxBullets) {
         enemyBullets.push(makeEnemyBullet(enemy.x, enemy.y, shotAngle, shotSpeed, kind));
       }
     };
     if (enemy.type === "caster") {
       // A slow radial ring creates a small bullet screen without flooding it.
-      const count = 4 + rank;
+      const count = adjustedBulletCount(4 + rank, 3);
       const bulletType = enemy.volley % 2 ? "orb" : "star";
       for (let i = 0; i < count; i++) {
         addBullet((Math.PI * 2 * i / count) + enemy.age * .45, speed * .72, bulletType);
       }
-      enemy.shot = Math.max(1.55, 2.45 - rank * .12);
+      enemy.shot = Math.max(1.55, 2.45 - rank * .12) * settings.interval;
     } else if (enemy.type === "swooper") {
-      const spread = rank >= 2 ? [-.2, 0, .2] : [0];
-      spread.forEach(offset => addBullet(angle + offset, speed, "shard"));
-      enemy.shot = Math.max(1.25, 2.05 - rank * .12);
+      const count = difficulty === "normal" && rank < 2 ? 1 : settings.fanCount;
+      emitFan(angle, count, .18, shotAngle => addBullet(shotAngle, speed, "shard"));
+      enemy.shot = Math.max(1.25, 2.05 - rank * .12) * settings.interval;
     } else {
       const bulletType = rank >= 3 && enemy.volley % 2 === 0 ? "rice" : "orb";
-      addBullet(angle, speed, bulletType);
-      if (rank >= 4) addBullet(angle + .18, speed * .92, bulletType);
-      enemy.shot = Math.max(1.4, 2.2 - rank * .1) + Math.random() * .35;
+      const count = difficulty === "easy" ? 1 : difficulty === "normal" ? (rank >= 4 ? 2 : 1) : difficulty === "hard" ? 3 : 5;
+      emitFan(angle, count, .16, shotAngle => addBullet(shotAngle, speed, bulletType));
+      enemy.shot = (Math.max(1.4, 2.2 - rank * .1) + Math.random() * .35) * settings.interval;
     }
   }
 
   function makeEnemyBullet(x, y, angle, speed, kind) {
     const radii = { orb: 5, shard: 5, rice: 4.5, star: 5.5, bossSmall: 3.5, bossMedium: 7, bossLarge: 11 };
+    const settings = difficultySettings();
     return Object.assign(takeFrom(pools.enemyBullets), {
-      x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-      r: radii[kind] || 5, kind, grazed: false
+      x, y, vx: Math.cos(angle) * speed * settings.speed, vy: Math.sin(angle) * speed * settings.speed,
+      r: (radii[kind] || 5) * settings.size, kind, grazed: false
     });
   }
 
@@ -398,6 +481,8 @@
     ui.title.textContent = "Stage clear";
     ui.copy.innerHTML = `Final score: ${pad(score)} · Graze: ${graze}<br>Choose a style to fly again.`;
     ui.choices.classList.remove("hidden");
+    ui.difficultyPanel.classList.remove("hidden");
+    ui.simulationOption.classList.remove("hidden");
     ui.continueButton.classList.add("hidden");
     ui.overlay.classList.remove("hidden");
   }
@@ -439,7 +524,7 @@
   }
 
   function addBossBullet(angle, speed, kind) {
-    if (!boss || enemyBullets.length >= MAX_ENEMY_BULLETS) return;
+    if (!boss || enemyBullets.length >= difficultySettings().maxBullets) return;
     enemyBullets.push(makeEnemyBullet(boss.x, boss.y + 12, angle, speed, kind));
   }
 
@@ -452,38 +537,45 @@
     boss.secondaryClock -= dt;
     if (boss.mode === "initial") {
       if (boss.patternClock > 0) return;
+      const settings = difficultySettings();
       const pattern = boss.volley++ % 3;
       if (pattern === 0) {
-        for (let i = 0; i < 12; i++) addBossBullet(i * Math.PI / 6 + boss.age * .18, 100, "bossSmall");
+        const count = adjustedBulletCount(12, 6);
+        for (let i = 0; i < count; i++) addBossBullet(i * Math.PI * 2 / count + boss.age * .18, 100, "bossSmall");
       } else if (pattern === 1) {
         const aimed = aimedAtPlayer();
-        [-.34, -.17, 0, .17, .34].forEach(offset => addBossBullet(aimed + offset, 125, "bossMedium"));
+        emitFan(aimed, bossFanCount(5), .17, angle => addBossBullet(angle, 125, "bossMedium"));
       } else {
         const aimed = aimedAtPlayer();
-        [-.3, 0, .3].forEach(offset => addBossBullet(aimed + offset, 76, "bossLarge"));
+        emitFan(aimed, bossFanCount(3), .3, angle => addBossBullet(angle, 76, "bossLarge"));
       }
-      boss.patternClock = .82;
+      boss.patternClock = .82 * settings.interval;
       return;
     }
 
     const card = boss.cardIndex;
     if (card === 0 && boss.patternClock <= 0) {
-      const count = 15;
+      const count = adjustedBulletCount(15, 9);
       const offset = boss.volley++ * .13;
       for (let i = 0; i < count; i++) {
         if ((i + boss.volley) % count === 0 || (i + boss.volley) % count === 1) continue;
         addBossBullet(i * Math.PI * 2 / count + offset, 92 + (i % 2) * 18, "bossMedium");
       }
-      boss.patternClock = .7;
+      boss.patternClock = .7 * difficultySettings().interval;
     } else if (card === 1 && boss.patternClock <= 0) {
       const sweep = Math.sin(boss.age * 1.7) * .82;
-      addBossBullet(Math.PI / 2 + sweep, 150, "bossSmall");
-      addBossBullet(Math.PI / 2 - sweep, 150, "bossSmall");
-      addBossBullet(Math.PI / 2 + sweep * .55, 118, "star");
-      addBossBullet(Math.PI / 2 - sweep * .55, 118, "star");
-      boss.patternClock = .2;
+      const layers = difficultySettings().sweepLayers;
+      const layerFactors = [1, .55, .78, .32];
+      for (let layer = 0; layer < layers; layer++) {
+        const factor = layerFactors[layer];
+        const kind = layer % 2 ? "star" : "bossSmall";
+        const speed = 150 - layer * 16;
+        addBossBullet(Math.PI / 2 + sweep * factor, speed, kind);
+        addBossBullet(Math.PI / 2 - sweep * factor, speed, kind);
+      }
+      boss.patternClock = .2 * difficultySettings().interval;
     } else if (card === 2 && boss.patternClock <= 0) {
-      const count = 9;
+      const count = adjustedBulletCount(9, 5);
       const offset = boss.volley++ * .17;
       const aim = aimedAtPlayer();
       let gap = Math.round((aim - offset) / (Math.PI * 2 / count));
@@ -492,14 +584,14 @@
         if (i === gap || i === (gap + 1) % count) continue;
         addBossBullet(i * Math.PI * 2 / count + offset, 72, "bossLarge");
       }
-      boss.patternClock = .62;
+      boss.patternClock = .62 * difficultySettings().interval;
     }
 
     if (boss.secondaryClock <= 0) {
       const aimed = aimedAtPlayer();
-      const spread = card === 2 ? [-.42, -.21, 0, .21, .42] : [-.24, 0, .24];
-      spread.forEach(offset => addBossBullet(aimed + offset, card === 2 ? 138 : 128, card === 0 ? "bossSmall" : "bossMedium"));
-      boss.secondaryClock = card === 1 ? 1.7 : 2.1;
+      const count = card === 2 ? bossFanCount(5) : difficultySettings().fanCount;
+      emitFan(aimed, count, card === 2 ? .21 : .24, angle => addBossBullet(angle, card === 2 ? 138 : 128, card === 0 ? "bossSmall" : "bossMedium"));
+      boss.secondaryClock = (card === 1 ? 1.7 : 2.1) * difficultySettings().interval;
     }
   }
 
@@ -518,7 +610,7 @@
     const range = boss.mode === "initial" ? 62 : 105;
     boss.x = W / 2 + Math.sin(boss.age * (boss.mode === "initial" ? .75 : .52)) * range;
     updateBossPattern(dt);
-    if (player.invincible <= 0 && dist2(boss, player) < (boss.r + player.r) ** 2) hitPlayer();
+    if (player.invincible <= 0 && circlesOverlap(boss, player, boss.r + player.r)) hitPlayer();
   }
 
   function updateStage(dt) {
@@ -612,7 +704,7 @@
     syncUI();
   }
 
-  function hitPlayer() {
+  function hitPlayer(clearEnemyShots = true) {
     if (player.invincible > 0) return;
     lives--;
     const lostPower = Math.min(power, 25);
@@ -621,7 +713,7 @@
     bombs = 2;
     shake = 12;
     burst(player.x, player.y, "#f04f64", 28);
-    recycleAll(enemyBullets, pools.enemyBullets);
+    if (clearEnemyShots) recycleAll(enemyBullets, pools.enemyBullets);
     recycleAll(playerBullets, pools.playerBullets);
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
@@ -633,6 +725,8 @@
       ui.title.textContent = "Flight ended";
       ui.copy.innerHTML = `Final score: ${pad(score)} · Graze: ${graze}<br>Choose a style for the next flight.`;
       ui.choices.classList.remove("hidden");
+      ui.difficultyPanel.classList.remove("hidden");
+      ui.simulationOption.classList.remove("hidden");
       ui.continueButton.classList.add("hidden");
       ui.bossHud.classList.add("hidden");
       ui.overlay.classList.remove("hidden");
@@ -704,11 +798,12 @@
       if (enemy.type === "swooper") enemy.x += Math.sin(enemy.age * 2.8 + enemy.seed) * 90 * dt;
       else enemy.x += Math.sin(enemy.age * 1.5 + enemy.seed) * 28 * dt;
       enemy.y += enemy.speed * dt;
-      if (enemy.shot <= 0 && enemy.y > 35 && enemy.y < H * .72) shootEnemy(enemy);
+      const swarmCanShoot = difficulty !== "easy" || enemy.type !== "swarm";
+      if (swarmCanShoot && enemy.shot <= 0 && enemy.y > 35 && enemy.y < H * .72) shootEnemy(enemy);
 
       // Enemy bodies are hazardous too. Use the player's deliberately small
       // hitbox so focused movement remains precise and predictable.
-      if (enemy.hp > 0 && player.invincible <= 0 && dist2(enemy, player) < (enemy.r + player.r) ** 2) {
+      if (enemy.hp > 0 && player.invincible <= 0 && circlesOverlap(enemy, player, enemy.r + player.r)) {
         enemy.hp = 0;
         burst(enemy.x, enemy.y, "#f04f64", 20);
         hitPlayer();
@@ -739,7 +834,7 @@
         continue;
       }
 
-      if (boss && !boss.entering && dist2(missile, boss) < (missile.r + boss.r) ** 2) {
+      if (boss && !boss.entering && circlesOverlap(missile, boss, missile.r + boss.r)) {
         missile.dead = true;
         burst(missile.x, missile.y, "#ffb46b", 7);
         damageBoss(missile.damage, "special");
@@ -747,7 +842,7 @@
       }
 
       for (const enemy of enemies) {
-        if (enemy.hp > 0 && dist2(missile, enemy) < (missile.r + enemy.r) ** 2) {
+        if (enemy.hp > 0 && circlesOverlap(missile, enemy, missile.r + enemy.r)) {
           enemy.hp -= missile.damage;
           missile.dead = true;
           burst(missile.x, missile.y, "#ffb46b", 7);
@@ -761,13 +856,13 @@
     const bulletGeneration = clearGeneration;
     for (const bullet of playerBullets) {
       if (bulletGeneration !== clearGeneration) break;
-      if (boss && !boss.entering && dist2(bullet, boss) < (boss.r + bullet.r) ** 2) {
+      if (boss && !boss.entering && circlesOverlap(bullet, boss, boss.r + bullet.r)) {
         bullet.y = -100;
         damageBoss(bullet.damage);
         continue;
       }
       for (const enemy of enemies) {
-        if (enemy.hp > 0 && dist2(bullet, enemy) < (enemy.r + bullet.r) ** 2) {
+        if (enemy.hp > 0 && circlesOverlap(bullet, enemy, enemy.r + bullet.r)) {
           bullet.y = -100;
           enemy.hp -= bullet.damage;
           if (enemy.hp <= 0) defeatEnemy(enemy);
@@ -778,19 +873,37 @@
     compactInPlace(enemies, activeEnemy);
     compactAndRecycle(playerBullets, pools.playerBullets, activePlayerBullet);
 
+    let grazedThisFrame = false;
+    let struckByBullet = false;
+    const canHitPlayer = player.invincible <= 0;
     for (const b of enemyBullets) {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      const d = Math.sqrt(dist2(b, player));
-      if (!b.grazed && d < 24 && d > player.r + b.r) {
+      if (!canHitPlayer) continue;
+
+      const dx = b.x - player.x;
+      const dy = b.y - player.y;
+      if (Math.abs(dx) > 24 || Math.abs(dy) > 24) continue;
+      const distanceSquared = dx * dx + dy * dy;
+      const hitRadius = player.r + b.r;
+      if (distanceSquared < hitRadius * hitRadius) {
+        struckByBullet = true;
+        break;
+      }
+      if (!b.grazed && distanceSquared < 24 * 24) {
         b.grazed = true;
         graze++;
         score += 25;
-        syncUI();
+        grazedThisFrame = true;
       }
-      if (d < player.r + b.r) { b.y = H + 100; hitPlayer(); }
     }
-    compactAndRecycle(enemyBullets, pools.enemyBullets, activeEnemyBullet);
+    if (struckByBullet) {
+      hitPlayer(false);
+      recycleAll(enemyBullets, pools.enemyBullets);
+    } else {
+      compactAndRecycle(enemyBullets, pools.enemyBullets, activeEnemyBullet);
+      if (grazedThisFrame) syncUI();
+    }
 
     for (const item of items) {
       item.age += dt;
@@ -952,15 +1065,15 @@
       const travelAngle = Math.atan2(b.vy, b.vx);
       if (b.kind === "shard") {
         ctx.rotate(travelAngle + Math.PI / 4);
-        ctx.shadowColor = "#54d4ff"; ctx.shadowBlur = 9; ctx.fillStyle = "#91e7ff";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#91e7ff";
         ctx.fillRect(-4, -4, 8, 8);
       } else if (b.kind === "rice") {
         ctx.rotate(travelAngle + Math.PI / 2);
-        ctx.shadowColor = "#ffd36a"; ctx.shadowBlur = 9; ctx.fillStyle = "#ffe28f";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#ffe28f";
         ctx.beginPath(); ctx.ellipse(0, 0, 4, 6, 0, 0, Math.PI * 2); ctx.fill();
       } else if (b.kind === "star") {
         ctx.rotate(b.x * .025 + b.y * .012);
-        ctx.shadowColor = "#b58aff"; ctx.shadowBlur = 10; ctx.fillStyle = "#c9a5ff";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#c9a5ff";
         ctx.beginPath();
         for (let i = 0; i < 10; i++) {
           const a = -Math.PI / 2 + i * Math.PI / 5;
@@ -969,22 +1082,22 @@
         }
         ctx.closePath(); ctx.fill();
       } else if (b.kind === "bossSmall") {
-        ctx.shadowColor = "#53d8ff"; ctx.shadowBlur = 8; ctx.fillStyle = "#4bbde8";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#4bbde8";
         ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI * 2); ctx.fill();
       } else if (b.kind === "bossMedium") {
-        ctx.shadowColor = "#d980ff"; ctx.shadowBlur = 12; ctx.fillStyle = "#a957d0";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#a957d0";
         ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = "#efb1ff"; ctx.lineWidth = 1; ctx.stroke();
       } else if (b.kind === "bossLarge") {
-        ctx.shadowColor = "#ff657f"; ctx.shadowBlur = 15; ctx.fillStyle = "#a52f54";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#a52f54";
         ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = "#ffb561"; ctx.lineWidth = 2; ctx.stroke();
       } else {
-        ctx.shadowColor = "#fe5881"; ctx.shadowBlur = 10; ctx.fillStyle = "#ff6d92";
+        ctx.shadowBlur = 0; ctx.fillStyle = "#ff6d92";
         ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI * 2); ctx.fill();
       }
       // The centered white core is the universal visual language for danger.
-      ctx.globalAlpha = 1; ctx.shadowColor = "white"; ctx.shadowBlur = 6; ctx.fillStyle = "#fff";
+      ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.fillStyle = "#fff";
       ctx.beginPath(); ctx.arc(0, 0, Math.max(1.9, b.r * .4), 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
@@ -1017,11 +1130,28 @@
   }
 
   function loop(ms) {
+    const workStartedAt = performance.now();
     const now = ms / 1000;
-    const dt = Math.min(.033, now - lastTime || 0);
+    const frameDelta = Math.min(.25, now - lastTime || 0);
     lastTime = now;
-    if (state === "playing") update(dt);
+    if (state === "playing") {
+      if (frameSyncedSimulation) {
+        update(FIXED_STEP);
+      } else {
+        simulationAccumulator += frameDelta;
+        let steps = 0;
+        while (simulationAccumulator >= FIXED_STEP && steps < MAX_SIMULATION_STEPS) {
+          update(FIXED_STEP);
+          simulationAccumulator -= FIXED_STEP;
+          steps++;
+        }
+        if (steps === MAX_SIMULATION_STEPS) simulationAccumulator = 0;
+      }
+    } else {
+      simulationAccumulator = 0;
+    }
     draw(now);
+    updatePerformanceDisplay(ms, performance.now() - workStartedAt);
     requestAnimationFrame(loop);
   }
 
@@ -1039,6 +1169,8 @@
       state = state === "playing" ? "paused" : "playing";
       ui.kicker.textContent = "A moment between spells"; ui.title.textContent = "Paused"; ui.copy.innerHTML = "Catch your breath.<br>Press Esc to continue.";
       ui.choices.classList.add("hidden");
+      ui.difficultyPanel.classList.add("hidden");
+      ui.simulationOption.classList.add("hidden");
       ui.continueButton.classList.remove("hidden");
       ui.overlay.classList.toggle("hidden", state === "playing");
     }
@@ -1046,7 +1178,11 @@
   });
   addEventListener("keyup", e => keys.delete(e.code));
   addEventListener("blur", () => keys.clear());
-  ui.choiceButtons.forEach(button => button.addEventListener("click", () => resetGame(button.dataset.character)));
+  ui.difficultyButtons.forEach(button => button.addEventListener("click", () => {
+    selectedDifficulty = button.dataset.difficulty;
+    ui.difficultyButtons.forEach(option => option.classList.toggle("active", option === button));
+  }));
+  ui.choiceButtons.forEach(button => button.addEventListener("click", () => resetGame(button.dataset.character, selectedDifficulty)));
   ui.continueButton.addEventListener("click", continueGame);
   document.querySelectorAll("[data-key]").forEach(button => {
     const code = button.dataset.key;

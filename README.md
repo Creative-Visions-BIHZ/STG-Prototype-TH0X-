@@ -41,6 +41,18 @@ Touch controls appear automatically on narrow screens.
 - **Type A — Reimu:** standard movement and wider, lower-damage shots. Power tiers add homing missiles; higher tiers launch them faster and eventually in pairs.
 - **Type B — Marisa:** 50% faster movement, bullet speed, and firing rate with narrow full-damage shots. Power tiers add piercing laser pulses that widen and split into twin beams.
 
+## Difficulty and simulation
+
+- **Easy:** swarms do not fire, three-way attacks become single aimed shots, and other patterns are smaller, slower, and less frequent.
+- **Normal:** the baseline patterns and projectile limits.
+- **Hard:** adds bullets, increases their size and speed, and shortens attack intervals.
+- **Lunatic:** adds still more bullets and substantially larger projectiles.
+
+The default fixed 60 Hz simulation runs independently of rendered FPS. At 25 FPS it
+performs multiple simulation updates per rendered frame, so movement and firing retain
+their intended rates. The optional **FPS-synced slowdown** setting instead performs one
+1/60-second update per rendered frame, intentionally slowing the game below 60 FPS.
+
 Marisa's lasers provide light piercing support damage; her ordinary focused fire remains
 the primary source of boss damage. Boss and spell-card HP are configured in
 `stage-profile.js` for straightforward balance tuning.
@@ -76,7 +88,15 @@ field; boss defeats and spell-card breaks receive larger phase-specific explosio
 
 High-churn combat objects use reusable pools for hostile bullets, player shots,
 missiles, laser pulses, and particles. Active arrays are compacted in place to avoid
-garbage-collection spikes during dense spell cards.
+garbage-collection spikes during dense spell cards. Collision checks use inexpensive
+axis rejection and squared distances, skip invulnerable-player checks, and batch graze
+HUD updates once per frame. Hostile bullets avoid per-object canvas blur effects.
+
+The HUD reports effective rolling FPS to two decimal places and workload twice per
+second. FPS is calculated from delivered animation-frame intervals rather than a frame
+counter. Its tooltip includes average/worst frame time and estimated missed 60 Hz
+frames. Workload is the portion of elapsed time spent in the game callback, followed
+by the current number of active game objects.
 
 ## Project structure
 
