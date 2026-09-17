@@ -16,6 +16,15 @@ Enemy bodies are also hazardous: touching one costs a life and destroys that ene
 Losing a life scatters up to one tier of the player's power as recoverable `P` items.
 They burst outward briefly before falling, giving the player a chance to reclaim them.
 
+Boss defeats scatter a fan of `P` items. Once shot power is maxed, surplus power is
+banked toward another bomb: the next stock costs `(current bombs + 1).00 P`, so a
+player holding two bombs needs `3.00 P` for the next one. The HUD tracks this progress.
+
+Blue point items also build a cumulative life-point total. Their value scales smoothly
+from 1× at the bottom of the playfield to 3× at the top, rewarding risky high pickups.
+Each 20,000 life points awards an additional life, with the next cumulative target
+shown in the HUD.
+
 ## Play
 
 Open `index.html` in a modern browser, or run a local server:
@@ -85,6 +94,8 @@ the same global-clear operation. It removes bullets and ordinary enemies, preser
 living boss between cards, and immediately collects every item on screen. Cleared
 enemies and projectiles burst individually before an expanding clear wave crosses the
 field; boss defeats and spell-card breaks receive larger phase-specific explosions.
+The introductory and final boss defeats then release their own power-item showers; the
+final shower remains collectible for a short victory window before stage-clear results.
 
 High-churn combat objects use reusable pools for hostile bullets, player shots,
 missiles, laser pulses, and particles. Active arrays are compacted in place to avoid

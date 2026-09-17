@@ -10,6 +10,8 @@
     graze: document.querySelector("#graze"),
     power: document.querySelector("#power"),
     bombs: document.querySelector("#bombs"),
+    bombProgress: document.querySelector("#bomb-progress"),
+    lifePoints: document.querySelector("#life-points"),
     rank: document.querySelector("#rank"),
     style: document.querySelector("#style"),
     difficulty: document.querySelector("#difficulty"),
@@ -40,6 +42,7 @@
   const MAX_PLAYER_BULLETS = 96;
   const FIXED_STEP = 1 / 60;
   const MAX_SIMULATION_STEPS = 5;
+  const LIFE_POINT_STEP = 20000;
   const SHIPS = {
     reimu: { label: "A · REIMU", moveSpeed: 245, focusSpeed: 145, bulletSpeed: 1, cooldown: .085, bulletRadius: 5.5, bulletWidth: 7, damage: .68 },
     marisa: { label: "B · MARISA", moveSpeed: 367.5, focusSpeed: 217.5, bulletSpeed: 1.5, cooldown: .085 / 1.5, bulletRadius: 3.5, bulletWidth: 3, damage: 1 }
@@ -80,7 +83,11 @@
   let graze = 0;
   let lives = 3;
   let power = 0;
+  let excessPower = 0;
   let bombs = 2;
+  let pointValue = 0;
+  let nextLifePointTarget = LIFE_POINT_STEP;
+  let stageClearTimer = 0;
   let bombWave = 0;
   let shownRank = 1;
   let clearGeneration = 0;
@@ -214,7 +221,11 @@
     ui.bossHud.classList.add("hidden");
     lives = 3;
     power = 0;
+    excessPower = 0;
     bombs = 2;
+    pointValue = 0;
+    nextLifePointTarget = LIFE_POINT_STEP;
+    stageClearTimer = 0;
     shownRank = 1;
     enemies = [];
     recycleAll(playerBullets, pools.playerBullets);
@@ -238,6 +249,9 @@
     ui.graze.textContent = String(graze).padStart(3, "0");
     ui.power.textContent = power >= 100 ? "P MAX" : `P ${(power / 25).toFixed(2)}`;
     ui.bombs.textContent = bombs > 0 ? Array(bombs).fill("●").join(" ") : "—";
+    const bombCost = (bombs + 1) * 25;
+    ui.bombProgress.textContent = `P ${(excessPower / 25).toFixed(2)} / ${(bombCost / 25).toFixed(2)}`;
+    ui.lifePoints.textContent = `${pointValue} / ${nextLifePointTarget}`;
     ui.rank.textContent = ["Ⅰ", "Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ"][difficultyRank()];
     ui.style.textContent = player ? SHIPS[player.character].label : "—";
     ui.difficulty.textContent = DIFFICULTIES[difficulty].label;
@@ -370,17 +384,62 @@
     });
   }
 
-  function collectItem(item, topBonus = false) {
+  function redeemExcessPower() {
+    let bombCost = (bombs + 1) * 25;
+    while (power >= 100 && excessPower >= bombCost) {
+      excessPower -= bombCost;
+      bombs++;
+      bombCost = (bombs + 1) * 25;
+    }
+  }
+
+  function addPower(amount) {
+    const needed = Math.max(0, 100 - power);
+    const gained = Math.min(needed, amount);
+    power += gained;
+    excessPower += amount - gained;
+    redeemExcessPower();
+  }
+
+  function addPointValue(baseValue, collectionY) {
+    const heightRatio = clamp(1 - collectionY / H, 0, 1);
+    const awarded = Math.round(baseValue * (1 + heightRatio * 2));
+    score += awarded;
+    pointValue += awarded;
+    while (pointValue >= nextLifePointTarget) {
+      lives++;
+      nextLifePointTarget += LIFE_POINT_STEP;
+    }
+  }
+
+  function collectItem(item, collectionY = item.y) {
     if (item.collected) return;
     item.collected = true;
     if (item.kind === "power") {
-      if (power < 100) power = Math.min(100, power + item.value);
-      else score += 500;
+      addPower(item.value);
       if (!item.recovered) score += 100;
       burst(item.x, item.y, "#ef596b", 7);
     } else {
-      score += item.value + (topBonus ? 200 : 0);
+      addPointValue(item.value, collectionY);
       burst(item.x, item.y, "#64c8ff", 7);
+    }
+  }
+
+  function scatterBossPower(x, y, count) {
+    for (let i = 0; i < count; i++) {
+      const spread = count === 1 ? 0 : (i / (count - 1) - .5) * Math.PI * .82;
+      const speed = 135 + (i % 3) * 17;
+      items.push({
+        x,
+        y,
+        vx: Math.sin(spread) * speed,
+        vy: -Math.cos(spread) * speed - 42,
+        age: 0,
+        kind: "power",
+        value: 10,
+        collectAfter: .45,
+        recovered: false
+      });
     }
   }
 
@@ -442,7 +501,7 @@
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
     enemies = [];
-    for (const item of items) collectItem(item, true);
+    for (const item of items) collectItem(item, 0);
     items = [];
     if (!keepLivingBoss) boss = null;
     if (!boss) ui.bossHud.classList.add("hidden");
@@ -491,16 +550,20 @@
     if (!boss) return;
     score += boss.mode === "initial" ? 5000 : 10000;
     if (boss.mode === "initial") {
+      const defeatedAt = { x: boss.x, y: boss.y };
       boss.hp = 0;
       globalClear(false);
+      scatterBossPower(defeatedAt.x, defeatedAt.y, 6);
       return;
     }
 
     const nextCard = boss.cardIndex + 1;
     if (nextCard >= SPELL_CARDS.length) {
+      const defeatedAt = { x: boss.x, y: boss.y };
       boss.hp = 0;
       globalClear(false);
-      finishStage();
+      scatterBossPower(defeatedAt.x, defeatedAt.y, 10);
+      stageClearTimer = 2.5;
       return;
     }
     globalClear(true);
@@ -614,6 +677,16 @@
   }
 
   function updateStage(dt) {
+    if (stageClearTimer > 0) {
+      stageClearTimer -= dt;
+      if (stageClearTimer <= 0) {
+        for (const item of items) collectItem(item, 0);
+        items = [];
+        syncUI();
+        finishStage();
+      }
+      return;
+    }
     if (!boss) stageTime += dt;
     const event = STAGE_PROFILE[stageEventIndex];
     if (!event || stageTime < event.at || boss) return;
@@ -689,6 +762,7 @@
   function useBomb() {
     if (state !== "playing" || bombs <= 0 || bombWave > 0) return;
     bombs--;
+    redeemExcessPower();
     bombWave = 1;
     player.invincible = 1.6;
     shake = 8;
@@ -709,6 +783,7 @@
     lives--;
     const lostPower = Math.min(power, 25);
     power -= lostPower;
+    excessPower = 0;
     if (lives > 0) scatterLostPower(player.x, player.y, lostPower);
     bombs = 2;
     shake = 12;
@@ -920,7 +995,7 @@
         item.vx *= Math.pow(.35, dt);
       }
       if (distance < 17 && item.age >= item.collectAfter) {
-        collectItem(item, player.y < 115);
+        collectItem(item, item.y);
         syncUI();
       }
     }
