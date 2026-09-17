@@ -35,6 +35,24 @@ python3 -m http.server 8080
 
 Then visit `http://localhost:8080`.
 
+## GitHub Pages deployment
+
+The repository includes a GitHub Actions workflow that publishes the static game after
+pushes to `main` or `LeoL's-Touhou`, as well as on manual dispatch. The intended custom
+domain is `stg.geeksproductionstudio.com`.
+
+In the repository's **Settings → Pages** screen, select **GitHub Actions** as the source
+and set the custom domain to `stg.geeksproductionstudio.com`. At the DNS provider for
+`geeksproductionstudio.com`, create this record:
+
+| Type | Name | Target |
+| --- | --- | --- |
+| `CNAME` | `stg` | `creative-visions-bihz.github.io` |
+
+After GitHub finishes issuing its certificate, enable **Enforce HTTPS**. Do not point
+the DNS record at the repository-specific URL; GitHub requires subdomain CNAME records
+to target the organization Pages hostname.
+
 ## Controls
 
 - **WASD / Arrow keys** — move
