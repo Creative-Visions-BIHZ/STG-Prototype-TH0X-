@@ -46,6 +46,7 @@
   const FIXED_STEP = 1 / 60;
   const MAX_SIMULATION_STEPS = 5;
   const LIFE_POINT_STEP = 20000;
+  const MIN_BOSS_POWER_DROP = 25;
   const STAGE_CLEAR_DURATION = 3.6;
   const audio = {
     context: null,
@@ -54,8 +55,8 @@
     lastPlayed: new Map()
   };
   const SHIPS = {
-    reimu: { label: "A · REIMU", moveSpeed: 245, focusSpeed: 145, bulletSpeed: 1, cooldown: .085, bulletRadius: 5.5, bulletWidth: 7, damage: .68 },
-    marisa: { label: "B · MARISA", moveSpeed: 367.5, focusSpeed: 217.5, bulletSpeed: 1.5, cooldown: .085 / 1.5, bulletRadius: 3.5, bulletWidth: 3, damage: 1 }
+    reimu: { label: "A · REIMU", moveSpeed: 245, focusSpeed: 145, bulletSpeed: 1, cooldown: .085, bulletRadius: 7, bulletWidth: 12, damage: .78, shotShape: "amulet" },
+    marisa: { label: "B · MARISA", moveSpeed: 367.5, focusSpeed: 217.5, bulletSpeed: 1.5, cooldown: .085 / 1.5, bulletRadius: 3.5, bulletWidth: 3, damage: 1, shotShape: "needle" }
   };
   const DIFFICULTIES = {
     easy: { label: "EASY", maxBullets: 80, countBonus: -3, size: .82, speed: .88, interval: 1.3, sweepLayers: 1, fanCount: 1 },
@@ -109,6 +110,7 @@
   let spellFailed = false;
   let bonusNotice = null;
   let bombWave = 0;
+  let characterBomb = null;
   let shownRank = 1;
   let clearGeneration = 0;
   let shake = 0;
@@ -217,7 +219,8 @@
 
   function activeObjectCount() {
     return enemies.length + playerBullets.length + missiles.length + lasers.length +
-      enemyBullets.length + items.length + particles.length + clearWaves.length + (boss ? 1 : 0);
+      enemyBullets.length + items.length + particles.length + clearWaves.length +
+      (boss ? 1 : 0) + (characterBomb ? 1 : 0);
   }
 
   function updatePerformanceDisplay(frameTimestamp, busyTime) {
@@ -299,12 +302,35 @@
     for (let index = 0; index < count; index++) emit(centerAngle + (index - middle) * spacing);
   }
 
-  function addPlayerShot(x, y, vx, vy, ship) {
+  function addPlayerShot(x, y, vx, vy, ship, rotation = 0) {
     if (playerBullets.length >= MAX_PLAYER_BULLETS) return;
     playerBullets.push(Object.assign(takeFrom(pools.playerBullets), {
       x, y, vx: vx * ship.bulletSpeed, vy: vy * ship.bulletSpeed,
-      r: ship.bulletRadius, width: ship.bulletWidth, damage: ship.damage
+      r: ship.bulletRadius, width: ship.bulletWidth, damage: ship.damage,
+      shape: ship.shotShape, rotation
     }));
+  }
+
+  function fireReimuVolley(ship, tier, focused) {
+    const innerSpread = focused || tier === 0 ? 0 : 18 + tier * 11;
+    addPlayerShot(player.x - 7, player.y - 14, -innerSpread, -520, ship, -.28);
+    addPlayerShot(player.x + 7, player.y - 14, innerSpread, -520, ship, .28);
+    if (tier >= 1) {
+      const outerSpread = focused ? 0 : 48 + tier * 13;
+      addPlayerShot(player.x - 16, player.y - 8, -outerSpread, -500, ship, -.4);
+      addPlayerShot(player.x + 16, player.y - 8, outerSpread, -500, ship, .4);
+    }
+    if (tier >= 3) addPlayerShot(player.x, player.y - 19, 0, -560, ship, .2);
+  }
+
+  function fireMarisaVolley(ship, tier) {
+    addPlayerShot(player.x - 6, player.y - 14, 0, -520, ship);
+    addPlayerShot(player.x + 6, player.y - 14, 0, -520, ship);
+    if (tier >= 1) {
+      addPlayerShot(player.x - 14, player.y - 9, -22, -500, ship);
+      addPlayerShot(player.x + 14, player.y - 9, 22, -500, ship);
+    }
+    if (tier >= 3) addPlayerShot(player.x, player.y - 19, 0, -560, ship);
   }
 
   function resetGame(character, chosenDifficulty = selectedDifficulty) {
@@ -333,6 +359,7 @@
     stageStartGraze = 0;
     spellFailed = false;
     bonusNotice = null;
+    characterBomb = null;
     shownRank = 1;
     enemies = [];
     recycleAll(playerBullets, pools.playerBullets);
@@ -507,15 +534,18 @@
 
   function dropLoot(enemy) {
     const roll = Math.random();
+    const powerNeed = 1 - clamp(power / 100, 0, 1);
+    const powerChance = enemy.type === "caster" ? .36 + powerNeed * .4 :
+      enemy.type === "swarm" ? .03 + powerNeed * .09 : .12 + powerNeed * .24;
     let kind;
-    if (enemy.type === "caster") kind = roll < .62 ? "power" : "point";
+    if (enemy.type === "caster") kind = roll < powerChance ? "power" : "point";
     else if (enemy.type === "swarm") {
-      if (roll < .03) kind = "power";
-      else if (roll < .43) kind = "point";
+      if (roll < powerChance) kind = "power";
+      else if (roll < .5) kind = "point";
       else return;
     }
-    else if (roll < .12) kind = "power";
-    else if (roll < .78) kind = "point";
+    else if (roll < powerChance) kind = "power";
+    else if (roll < .8) kind = "point";
     else return;
 
     items.push({
@@ -525,7 +555,7 @@
       vy: -115 - Math.random() * 35,
       age: 0,
       kind,
-      value: kind === "power" ? (enemy.type === "caster" ? 15 : 8) : 300,
+      value: kind === "power" ? (enemy.type === "caster" ? 5 : enemy.type === "swarm" ? 1.25 : 2.5) : 300,
       collectAfter: .12,
       recovered: false
     });
@@ -576,8 +606,11 @@
   }
 
   function scatterBossPower(x, y, count) {
-    for (let i = 0; i < count; i++) {
-      const spread = count === 1 ? 0 : (i / (count - 1) - .5) * Math.PI * .82;
+    const itemCount = Math.max(5, count);
+    const totalPower = Math.max(MIN_BOSS_POWER_DROP, itemCount * 5);
+    const itemValue = totalPower / itemCount;
+    for (let i = 0; i < itemCount; i++) {
+      const spread = itemCount === 1 ? 0 : (i / (itemCount - 1) - .5) * Math.PI * .82;
       const speed = 135 + (i % 3) * 17;
       items.push({
         x,
@@ -586,7 +619,7 @@
         vy: -Math.cos(spread) * speed - 42,
         age: 0,
         kind: "power",
-        value: 10,
+        value: itemValue,
         collectAfter: .45,
         recovered: false
       });
@@ -595,12 +628,12 @@
 
   function scatterLostPower(x, y, amount) {
     if (amount <= 0) return;
-    const count = Math.min(4, Math.ceil(amount / 8));
+    const count = Math.min(5, Math.ceil(amount / 5));
     let remaining = amount;
     for (let i = 0; i < count; i++) {
       const angle = -Math.PI + ((i + 1) / (count + 1)) * Math.PI;
       const speed = 130 + Math.random() * 35;
-      const value = Math.ceil(remaining / (count - i));
+      const value = remaining / (count - i);
       remaining -= value;
       items.push({
         x,
@@ -670,6 +703,7 @@
     recycleAll(playerBullets, pools.playerBullets);
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
+    characterBomb = null;
     enemies = [];
     launchItemsToPlayer();
     if (!keepLivingBoss) boss = null;
@@ -1145,11 +1179,11 @@
     }
   }
 
-  function emitMarisaLasers(tier) {
+  function emitMarisaLasers(tier, focused) {
     playSound("special");
-    const offsets = tier >= 3 ? [-10, 10] : [0];
-    const width = 3.5 + tier * .7;
-    const laserDamage = .1 + tier * .035;
+    const offsets = focused ? [-3, 3] : [-13, 13];
+    const width = 3 + tier * .8;
+    const laserDamage = .055 + tier * .035;
     for (const offset of offsets) {
       const x = player.x + offset;
       lasers.push(Object.assign(takeFrom(pools.lasers), { x, y: player.y - 12, width, life: .14, maxLife: .14 }));
@@ -1167,23 +1201,130 @@
     }
   }
 
+  function beginCharacterBomb() {
+    if (player.character === "reimu") {
+      characterBomb = {
+        type: "reimu", x: player.x, y: player.y - 24, vx: 0, vy: -260,
+        speed: 285, turnSpeed: 6.5, r: 34, life: 3.4, tick: 0, flash: 0,
+        target: nearestEnemy(player.x, player.y), departing: false,
+        orbitDirection: Math.random() < .5 ? -1 : 1, departTime: 0
+      };
+      bonusNotice = { title: "SPIRIT SIGN", detail: "Fantasy Seal", life: 1.7, maxLife: 1.7, color: "#ffb5c7" };
+      player.invincible = 3.7;
+    } else {
+      characterBomb = { type: "marisa", life: 2.25, maxLife: 2.25, tick: 0, width: 150 };
+      bonusNotice = { title: "LOVE SIGN", detail: "Master Spark", life: 1.7, maxLife: 1.7, color: "#fff09a" };
+      player.invincible = 2.55;
+    }
+  }
+
+  function updateCharacterBomb(dt) {
+    if (!characterBomb) return;
+    const effect = characterBomb;
+    effect.life -= dt;
+    effect.tick -= dt;
+    effect.flash = Math.max(0, (effect.flash || 0) - dt);
+    if (effect.life <= 0) {
+      characterBomb = null;
+      return;
+    }
+
+    if (effect.type === "reimu") {
+      if (!effect.departing && (!effect.target || effect.target.hp <= 0 || effect.target.entering)) {
+        effect.target = nearestEnemy(effect.x, effect.y);
+        if (!effect.target) {
+          effect.departing = true;
+          effect.departTime = 0;
+          effect.life = Math.min(effect.life, 1.15);
+        }
+      }
+      if (effect.departing) {
+        effect.departTime += dt;
+        const angle = Math.atan2(effect.vy, effect.vx) + effect.orbitDirection * (2.5 + effect.departTime) * dt;
+        const speed = effect.speed + effect.departTime * 90;
+        effect.vx = Math.cos(angle) * speed;
+        effect.vy = Math.sin(angle) * speed;
+        effect.x += effect.vx * dt;
+        effect.y += effect.vy * dt;
+        if (effect.tick <= 0) {
+          effect.tick = .065;
+          burst(effect.x, effect.y, "#ffffff", 2);
+        }
+        if (effect.x < -effect.r * 2 || effect.x > W + effect.r * 2 ||
+          effect.y < -effect.r * 2 || effect.y > H + effect.r * 2) characterBomb = null;
+        return;
+      }
+      if (effect.target) {
+        const currentAngle = Math.atan2(effect.vy, effect.vx);
+        const desiredAngle = Math.atan2(effect.target.y - effect.y, effect.target.x - effect.x);
+        const difference = Math.atan2(Math.sin(desiredAngle - currentAngle), Math.cos(desiredAngle - currentAngle));
+        const angle = currentAngle + clamp(difference, -effect.turnSpeed * dt, effect.turnSpeed * dt);
+        effect.vx = Math.cos(angle) * effect.speed;
+        effect.vy = Math.sin(angle) * effect.speed;
+      }
+      effect.x += effect.vx * dt;
+      effect.y += effect.vy * dt;
+      effect.x = clamp(effect.x, effect.r, W - effect.r);
+      effect.y = clamp(effect.y, effect.r, H - effect.r);
+      shake = Math.max(shake, 2.5);
+
+      if (effect.tick <= 0) {
+        effect.tick = .09;
+        let connected = false;
+        for (const enemy of enemies) {
+          if (enemy.hp > 0 && circlesOverlap(effect, enemy, effect.r + enemy.r)) {
+            enemy.hp -= 8;
+            connected = true;
+            if (enemy.hp <= 0) defeatEnemy(enemy, "#ffafbf");
+          }
+        }
+        if (boss && !boss.entering && circlesOverlap(effect, boss, effect.r + boss.r)) {
+          connected = true;
+          const generation = clearGeneration;
+          damageBoss(1.25);
+          if (generation !== clearGeneration) return;
+        }
+        if (connected) {
+          shake = Math.max(shake, 7);
+          effect.flash = .14;
+          burst(effect.x, effect.y, "#ffffff", 9);
+          burst(effect.x, effect.y, "#ffe69c", 5);
+        }
+      }
+    } else {
+      effect.x = player.x;
+      effect.y = player.y - 10;
+      shake = Math.max(shake, 8);
+      if (effect.tick <= 0) {
+        effect.tick = .075;
+        const halfWidth = effect.width / 2;
+        for (const enemy of enemies) {
+          if (enemy.hp > 0 && enemy.y < player.y && Math.abs(enemy.x - player.x) < halfWidth + enemy.r) {
+            enemy.hp -= 14;
+            if (enemy.hp <= 0) defeatEnemy(enemy, "#fff1a3");
+          }
+        }
+        if (boss && !boss.entering && boss.y < player.y && Math.abs(boss.x - player.x) < halfWidth + boss.r) {
+          const generation = clearGeneration;
+          damageBoss(3.5);
+          if (generation !== clearGeneration) return;
+        }
+      }
+    }
+  }
+
   function useBomb() {
-    if (state !== "playing" || stageResult || bombs <= 0 || bombWave > 0) return;
+    if (state !== "playing" || stageResult || bombs <= 0 || bombWave > 0 || characterBomb) return;
     if (boss && boss.cardIndex >= 0) spellFailed = true;
     bombs--;
     playSound("bomb");
     redeemExcessPower();
     bombWave = 1;
-    player.invincible = 1.6;
     shake = 8;
     for (const bullet of enemyBullets) burst(bullet.x, bullet.y, "#8ceaff", 2);
     score += enemyBullets.length * 5;
     recycleAll(enemyBullets, pools.enemyBullets);
-    for (const enemy of enemies) enemy.hp -= 5;
-    for (const enemy of enemies) {
-      if (enemy.hp <= 0) defeatEnemy(enemy, "#f5d681");
-    }
-    if (boss && !boss.entering) damageBoss(5);
+    beginCharacterBomb();
     burst(player.x, player.y, "#f5d681", 34);
     syncUI();
   }
@@ -1251,13 +1392,8 @@
     const firing = !stageResult && (keys.has("KeyZ") || keys.has("KeyJ"));
     if (firing && player.cooldown <= 0) {
       if (playerBullets.length < MAX_PLAYER_BULLETS) {
-        addPlayerShot(player.x - 6, player.y - 14, 0, -520, ship);
-        addPlayerShot(player.x + 6, player.y - 14, 0, -520, ship);
-        if (powerTier >= 1) {
-          addPlayerShot(player.x - 14, player.y - 9, -22, -500, ship);
-          addPlayerShot(player.x + 14, player.y - 9, 22, -500, ship);
-        }
-        if (powerTier >= 3) addPlayerShot(player.x, player.y - 19, 0, -560, ship);
+        if (player.character === "reimu") fireReimuVolley(ship, powerTier, focused);
+        else fireMarisaVolley(ship, powerTier);
       }
       playSound("shoot");
       player.cooldown = ship.cooldown;
@@ -1268,13 +1404,14 @@
         launchReimuMissiles(powerTier);
         player.specialCooldown = Math.max(.28, .62 - powerTier * .08);
       } else {
-        emitMarisaLasers(powerTier);
+        emitMarisaLasers(powerTier, focused);
         player.specialCooldown = Math.max(.12, .25 - powerTier * .025);
       }
     }
 
     updateStage(dt);
     updateBoss(dt);
+    updateCharacterBomb(dt);
 
     for (const b of playerBullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
     compactAndRecycle(playerBullets, pools.playerBullets, activePlayerBullet);
@@ -1516,6 +1653,78 @@
     ctx.restore();
   }
 
+  function drawCharacterBomb() {
+    if (!characterBomb) return;
+    const effect = characterBomb;
+    if (effect.type === "reimu") {
+      ctx.save();
+      ctx.translate(effect.x, effect.y);
+      ctx.globalCompositeOperation = "lighter";
+      const trailAngle = Math.atan2(effect.vy, effect.vx);
+      ctx.save(); ctx.rotate(trailAngle);
+      ctx.strokeStyle = "rgba(255, 255, 255, .5)";
+      ctx.shadowColor = "#ffffff"; ctx.shadowBlur = 22;
+      ctx.lineWidth = effect.r * .72; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(-effect.r * .15, 0); ctx.lineTo(-effect.r * 1.7, 0); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = "rgba(255, 255, 255, .13)";
+      ctx.beginPath(); ctx.arc(0, 0, effect.r * 1.75, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255, 246, 204, .2)";
+      ctx.beginPath(); ctx.arc(0, 0, effect.r * 1.35, 0, Math.PI * 2); ctx.fill();
+      if (effect.flash > 0) {
+        const flashAlpha = effect.flash / .14;
+        ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha * .72})`;
+        ctx.beginPath(); ctx.arc(0, 0, effect.r * (2.1 - flashAlpha * .35), 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(255, 244, 174, ${flashAlpha})`;
+        ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.arc(0, 0, effect.r * (1.2 + (1 - flashAlpha) * .8), 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.rotate(effect.life * 3.2);
+      ctx.shadowColor = "#ffffff";
+      ctx.shadowBlur = 32;
+      ctx.fillStyle = "#d9345c";
+      ctx.beginPath(); ctx.arc(0, 0, effect.r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff3e8";
+      ctx.beginPath(); ctx.arc(0, 0, effect.r, -Math.PI / 2, Math.PI / 2); ctx.fill();
+      ctx.fillStyle = "#fff3e8";
+      ctx.beginPath(); ctx.arc(0, -effect.r / 2, effect.r / 2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#d9345c";
+      ctx.beginPath(); ctx.arc(0, effect.r / 2, effect.r / 2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#d9345c";
+      ctx.beginPath(); ctx.arc(0, -effect.r / 2, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff3e8";
+      ctx.beginPath(); ctx.arc(0, effect.r / 2, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "#ffd77a"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(0, 0, effect.r, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    const warmup = Math.min(1, (effect.maxLife - effect.life) * 7);
+    const fade = Math.min(1, effect.life * 2.5);
+    const alpha = warmup * fade;
+    const pulse = 1 + Math.sin(effect.life * 35) * .045;
+    const width = effect.width * pulse;
+    const gradient = ctx.createLinearGradient(effect.x - width / 2, 0, effect.x + width / 2, 0);
+    gradient.addColorStop(0, `rgba(255, 196, 68, 0)`);
+    gradient.addColorStop(.16, `rgba(255, 183, 55, ${alpha * .62})`);
+    gradient.addColorStop(.38, `rgba(255, 245, 165, ${alpha})`);
+    gradient.addColorStop(.5, `rgba(255, 255, 255, ${alpha})`);
+    gradient.addColorStop(.62, `rgba(255, 245, 165, ${alpha})`);
+    gradient.addColorStop(.84, `rgba(255, 183, 55, ${alpha * .62})`);
+    gradient.addColorStop(1, `rgba(255, 196, 68, 0)`);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = gradient;
+    ctx.shadowColor = "#ffd34f";
+    ctx.shadowBlur = 36;
+    ctx.fillRect(effect.x - width / 2, 0, width, effect.y);
+    ctx.fillStyle = `rgba(255, 255, 238, ${alpha})`;
+    ctx.fillRect(effect.x - width * .12, 0, width * .24, effect.y + 8);
+    ctx.restore();
+  }
+
   function draw(time) {
     ctx.save();
     if (shake) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
@@ -1532,10 +1741,18 @@
       ctx.beginPath(); ctx.moveTo(laser.x, laser.y); ctx.lineTo(laser.x, 0); ctx.stroke();
     }
     for (const b of playerBullets) {
-      const isWide = b.width > 3;
-      ctx.shadowColor = isWide ? "#ff91ac" : "#7fe7ff"; ctx.shadowBlur = 9;
-      ctx.fillStyle = isWide ? "#ffd8e3" : "#d7fbff";
-      ctx.fillRect(b.x - b.width / 2, b.y - 10, b.width, 16);
+      if (b.shape === "amulet") {
+        ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.rotation);
+        ctx.shadowColor = "#ff7298"; ctx.shadowBlur = 10;
+        ctx.fillStyle = "#ffd2df"; ctx.fillRect(-b.width / 2, -b.width / 2, b.width, b.width);
+        ctx.shadowBlur = 0; ctx.fillStyle = "#d83d64";
+        ctx.fillRect(-b.width * .3, -b.width * .3, b.width * .6, b.width * .6);
+        ctx.restore();
+      } else {
+        ctx.shadowColor = "#7fe7ff"; ctx.shadowBlur = 9;
+        ctx.fillStyle = "#d7fbff";
+        ctx.fillRect(b.x - b.width / 2, b.y - 10, b.width, 16);
+      }
     }
     for (const missile of missiles) {
       const angle = Math.atan2(missile.vy, missile.vx) + Math.PI / 2;
@@ -1609,6 +1826,7 @@
       ctx.beginPath(); ctx.arc(0, 0, Math.max(1.9, b.r * .4), 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
+    drawCharacterBomb();
     for (const wave of clearWaves) {
       const progress = 1 - wave.life / wave.maxLife;
       const alpha = Math.sin(progress * Math.PI) * .7;

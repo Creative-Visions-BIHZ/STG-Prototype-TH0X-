@@ -10,15 +10,20 @@ extension points for developers.
 Defeated enemies can drop blue point items for score or rarer red `P` talismans for
 shot power. Items briefly pop upward before falling and are attracted to the player
 at close range; moving to the top of the field attracts all visible items.
+Individual power items grant only `0.05–0.20 P`, depending on their source. Their drop
+chance rises smoothly when the player is low on power and tapers as `P MAX` approaches,
+so recovery is generous without causing abrupt tier jumps.
 All safe collectibles are upright squares without a white circular core. Hostile
 bullets use a bright white center to make their collision area immediately readable.
 Enemy bodies are also hazardous: touching one costs a life and destroys that enemy.
 Losing a life scatters up to one tier of the player's power as recoverable `P` items.
 They burst outward briefly before falling, giving the player a chance to reclaim them.
 
-Boss defeats scatter a fan of `P` items. Once shot power is maxed, surplus power is
-banked toward another bomb: the next stock costs `(current bombs + 1).00 P`, so a
-player holding two bombs needs `3.00 P` for the next one. The HUD tracks this progress.
+Boss defeats scatter a fan of at least five `P` items totaling no less than `1.00 P`.
+The current introductory and final rewards total `1.20 P` and `2.00 P`, respectively.
+Once shot power is maxed, surplus power is banked toward another bomb: the next stock
+costs `(current bombs + 1).00 P`, so a player holding two bombs needs `3.00 P` for the
+next one. The HUD tracks this progress.
 
 Blue point items also build a cumulative life-point total. Their value scales smoothly
 from 1× at the bottom of the playfield to 3× at the top, rewarding risky high pickups.
@@ -37,12 +42,13 @@ Then visit `http://localhost:8080`.
 
 ## GitHub Pages deployment
 
-The repository includes a GitHub Actions workflow that publishes the static game after
-pushes to `main` or `LeoL's-Touhou`, as well as on manual dispatch. The intended custom
-domain is `stg.geeksproductionstudio.com`.
+This dependency-free site is published directly from the root of the
+`LeoL's-Touhou` branch. The intended custom domain is
+`stg.geeksproductionstudio.com`.
 
-In the repository's **Settings → Pages** screen, select **GitHub Actions** as the source
-and set the custom domain to `stg.geeksproductionstudio.com`. At the DNS provider for
+In the repository's **Settings → Pages** screen, choose **Deploy from a branch**. Select
+the `LeoL's-Touhou` branch, select the `/(root)` folder, and save. Then set the custom
+domain to `stg.geeksproductionstudio.com`. At the DNS provider for
 `geeksproductionstudio.com`, create this record:
 
 | Type | Name | Target |
@@ -65,8 +71,16 @@ Touch controls appear automatically on narrow screens.
 
 ## Shot styles
 
-- **Type A — Reimu:** standard movement and wider, lower-damage shots. Power tiers add homing missiles; higher tiers launch them faster and eventually in pairs.
-- **Type B — Marisa:** 50% faster movement, bullet speed, and firing rate with narrow full-damage shots. Power tiers add piercing laser pulses that widen and split into twin beams.
+- **Type A — Reimu:** standard movement with large, tilted square amulets. Powered unfocused volleys spread into a widening V for broad coverage; holding Shift makes every lane parallel. Power tiers also add homing missiles.
+- **Type B — Marisa:** 50% faster movement, bullet speed, and firing rate with narrow full-damage shots. Her piercing laser is always a pair of side beams; holding Shift pulls them together at the center, while power increases their width, damage, and pulse rate.
+
+Both bomb cards immediately cancel hostile bullets, then diverge by character. Reimu's
+**Spirit Sign [Fantasy Seal]** launches a large, enduring Yin-Yang orb that homes between targets, repeatedly hits
+enemies or bosses, and produces white-light clashes with field shake on impact. With no
+valid target it curves away in a short departure arc and disappears instead of waiting.
+Marisa's **Love Sign [Master Spark]** fires directly
+from her position: an extremely wide, high-damage laser that persists for several
+multi-hit pulses. Either bomb ends when a boss phase is cleared.
 
 ## Difficulty and simulation
 
@@ -85,8 +99,8 @@ normal death penalties, recovery-item burst, and bomb reset. The HUD counts net 
 lost as deaths minus life extends earned from point items (never displaying below zero).
 Practice scores are not saved as high scores.
 
-Marisa's lasers provide light piercing support damage; her ordinary focused fire remains
-the primary source of boss damage. Boss and spell-card HP are configured in
+Marisa's power-scaled twin lasers provide piercing support damage; her ordinary focused
+fire remains the primary source of boss damage. Boss and spell-card HP are configured in
 `stage-profile.js` for straightforward balance tuning.
 
 During the final 20% of every boss health bar, a specialty guard reduces missile and
