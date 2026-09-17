@@ -7,6 +7,7 @@
     score: document.querySelector("#score"),
     high: document.querySelector("#high-score"),
     lives: document.querySelector("#lives"),
+    livesLost: document.querySelector("#lives-lost"),
     graze: document.querySelector("#graze"),
     power: document.querySelector("#power"),
     bombs: document.querySelector("#bombs"),
@@ -28,6 +29,8 @@
     difficultyPanel: document.querySelector("#difficulty-buttons"),
     simulationOption: document.querySelector("#simulation-option"),
     syncSimulation: document.querySelector("#sync-simulation"),
+    practiceOption: document.querySelector("#practice-option"),
+    practiceMode: document.querySelector("#practice-mode"),
     continueButton: document.querySelector("#continue-button"),
     bossHud: document.querySelector("#boss-hud"),
     bossName: document.querySelector("#boss-name"),
@@ -43,6 +46,13 @@
   const FIXED_STEP = 1 / 60;
   const MAX_SIMULATION_STEPS = 5;
   const LIFE_POINT_STEP = 20000;
+  const STAGE_CLEAR_DURATION = 3.6;
+  const audio = {
+    context: null,
+    output: null,
+    noiseBuffer: null,
+    lastPlayed: new Map()
+  };
   const SHIPS = {
     reimu: { label: "A · REIMU", moveSpeed: 245, focusSpeed: 145, bulletSpeed: 1, cooldown: .085, bulletRadius: 5.5, bulletWidth: 7, damage: .68 },
     marisa: { label: "B · MARISA", moveSpeed: 367.5, focusSpeed: 217.5, bulletSpeed: 1.5, cooldown: .085 / 1.5, bulletRadius: 3.5, bulletWidth: 3, damage: 1 }
@@ -53,8 +63,8 @@
     hard: { label: "HARD", maxBullets: 170, countBonus: 2, size: 1.18, speed: 1.08, interval: .86, sweepLayers: 3, fanCount: 5 },
     lunatic: { label: "LUNATIC", maxBullets: 220, countBonus: 4, size: 1.42, speed: 1.16, interval: .72, sweepLayers: 4, fanCount: 7 }
   };
-  const STAGE_PROFILE = globalThis.STG_STAGE.events;
-  const SPELL_CARDS = globalThis.STG_STAGE.spellCards;
+  const STAGES = globalThis.STG_STAGES || [globalThis.STG_STAGE];
+  const DIFFICULTY_ORDER = { easy: 0, normal: 1, hard: 2, lunatic: 3 };
   const keys = new Set();
   const stars = Array.from({ length: 95 }, () => ({
     x: Math.random() * W,
@@ -70,6 +80,7 @@
   let selectedDifficulty = "normal";
   let difficulty = "normal";
   let frameSyncedSimulation = false;
+  let practiceMode = false;
   let performanceLastFrame = 0;
   let performanceElapsedTime = 0;
   let performanceFrameCount = 0;
@@ -79,15 +90,24 @@
   let elapsed = 0;
   let stageTime = 0;
   let stageEventIndex = 0;
+  let stageIndex = 0;
+  let activeCards = [];
   let score = 0;
   let graze = 0;
   let lives = 3;
+  let practiceDeaths = 0;
+  let practiceLifeGains = 0;
   let power = 0;
   let excessPower = 0;
   let bombs = 2;
   let pointValue = 0;
   let nextLifePointTarget = LIFE_POINT_STEP;
   let stageClearTimer = 0;
+  let stageResult = null;
+  let stageSpellBonus = 0;
+  let stageStartGraze = 0;
+  let spellFailed = false;
+  let bonusNotice = null;
   let bombWave = 0;
   let shownRank = 1;
   let clearGeneration = 0;
@@ -121,6 +141,79 @@
   };
   const pad = n => Math.floor(n).toString().padStart(7, "0");
   const difficultyRank = () => Math.min(5, 1 + Math.floor(elapsed / 28));
+
+  function unlockAudio() {
+    if (!audio.context) {
+      const AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!AudioContext) return false;
+      audio.context = new AudioContext();
+      audio.output = audio.context.createGain();
+      audio.output.gain.value = .18;
+      audio.output.connect(audio.context.destination);
+
+      audio.noiseBuffer = audio.context.createBuffer(1, audio.context.sampleRate * .5, audio.context.sampleRate);
+      const data = audio.noiseBuffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    }
+    if (audio.context.state === "suspended") audio.context.resume();
+    return true;
+  }
+
+  function tone({ frequency, endFrequency = frequency, duration = .08, volume = .15, type = "square", delay = 0 }) {
+    if (!audio.context || audio.context.state !== "running") return;
+    const start = audio.context.currentTime + delay;
+    const oscillator = audio.context.createOscillator();
+    const gain = audio.context.createGain();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, start);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), start + duration);
+    gain.gain.setValueAtTime(.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + .006);
+    gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+    oscillator.connect(gain).connect(audio.output);
+    oscillator.start(start);
+    oscillator.stop(start + duration + .02);
+  }
+
+  function noise({ duration = .16, volume = .12, frequency = 900, delay = 0 }) {
+    if (!audio.context || audio.context.state !== "running") return;
+    const start = audio.context.currentTime + delay;
+    const source = audio.context.createBufferSource();
+    const filter = audio.context.createBiquadFilter();
+    const gain = audio.context.createGain();
+    source.buffer = audio.noiseBuffer;
+    filter.type = "bandpass";
+    filter.frequency.value = frequency;
+    filter.Q.value = .8;
+    gain.gain.setValueAtTime(volume, start);
+    gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+    source.connect(filter).connect(gain).connect(audio.output);
+    source.start(start);
+    source.stop(start + duration);
+  }
+
+  function playSound(name) {
+    if (!audio.context || audio.context.state !== "running") return;
+    const now = audio.context.currentTime;
+    const limits = { shoot: .055, enemyShot: .09, graze: .07, pickup: .035, enemyDown: .045 };
+    if (now - (audio.lastPlayed.get(name) || -Infinity) < (limits[name] || 0)) return;
+    audio.lastPlayed.set(name, now);
+
+    if (name === "shoot") tone({ frequency: 620, endFrequency: 310, duration: .045, volume: .055, type: "square" });
+    else if (name === "special") tone({ frequency: 760, endFrequency: 1120, duration: .1, volume: .07, type: "sawtooth" });
+    else if (name === "enemyShot") tone({ frequency: 180, endFrequency: 125, duration: .075, volume: .045, type: "triangle" });
+    else if (name === "enemyDown") { tone({ frequency: 180, endFrequency: 65, duration: .11, volume: .09, type: "sawtooth" }); noise({ duration: .08, volume: .045, frequency: 700 }); }
+    else if (name === "pickup") { tone({ frequency: 720, endFrequency: 1080, duration: .07, volume: .09, type: "sine" }); }
+    else if (name === "powerPickup") { tone({ frequency: 440, endFrequency: 880, duration: .12, volume: .11, type: "triangle" }); tone({ frequency: 660, endFrequency: 1320, duration: .1, volume: .055, type: "sine", delay: .035 }); }
+    else if (name === "graze") tone({ frequency: 1250, endFrequency: 1750, duration: .045, volume: .045, type: "sine" });
+    else if (name === "bomb") { noise({ duration: .7, volume: .24, frequency: 380 }); tone({ frequency: 90, endFrequency: 38, duration: .75, volume: .24, type: "sawtooth" }); }
+    else if (name === "hit") { noise({ duration: .38, volume: .2, frequency: 520 }); tone({ frequency: 210, endFrequency: 42, duration: .45, volume: .2, type: "sawtooth" }); }
+    else if (name === "boss") { tone({ frequency: 110, endFrequency: 220, duration: .55, volume: .14, type: "sawtooth" }); tone({ frequency: 165, endFrequency: 330, duration: .55, volume: .1, type: "triangle", delay: .12 }); }
+    else if (name === "phaseClear") { [523, 659, 784].forEach((frequency, i) => tone({ frequency, endFrequency: frequency * 1.25, duration: .24, volume: .11, type: "triangle", delay: i * .075 })); }
+    else if (name === "stageClear") { [523, 659, 784, 1047].forEach((frequency, i) => tone({ frequency, duration: .32, volume: .12, type: "triangle", delay: i * .11 })); }
+    else if (name === "menu") tone({ frequency: 420, endFrequency: 620, duration: .09, volume: .08, type: "triangle" });
+    else if (name === "pause") tone({ frequency: 330, endFrequency: 220, duration: .12, volume: .08, type: "sine" });
+  }
 
   function activeObjectCount() {
     return enemies.length + playerBullets.length + missiles.length + lasers.length +
@@ -195,6 +288,9 @@
   const activeClearWave = wave => wave.life > 0;
 
   const difficultySettings = () => DIFFICULTIES[difficulty];
+  const stageProfile = () => STAGES[stageIndex];
+  const availableCards = encounter => stageProfile()[`${encounter}Cards`].filter(card =>
+    DIFFICULTY_ORDER[difficulty] >= DIFFICULTY_ORDER[card.minDifficulty || "easy"]);
   const adjustedBulletCount = (base, minimum = 1) => Math.max(minimum, base + difficultySettings().countBonus);
   const bossFanCount = base => difficulty === "easy" ? 1 : base + difficultySettings().countBonus;
 
@@ -212,20 +308,31 @@
   }
 
   function resetGame(character, chosenDifficulty = selectedDifficulty) {
+    unlockAudio();
+    playSound("menu");
     elapsed = stageTime = score = graze = shake = bombWave = 0;
+    stageIndex = 0;
     stageEventIndex = 0;
     boss = null;
     difficulty = chosenDifficulty;
     frameSyncedSimulation = ui.syncSimulation.checked;
+    practiceMode = ui.practiceMode.checked;
     simulationAccumulator = 0;
     ui.bossHud.classList.add("hidden");
     lives = 3;
+    practiceDeaths = 0;
+    practiceLifeGains = 0;
     power = 0;
     excessPower = 0;
     bombs = 2;
     pointValue = 0;
     nextLifePointTarget = LIFE_POINT_STEP;
     stageClearTimer = 0;
+    stageResult = null;
+    stageSpellBonus = 0;
+    stageStartGraze = 0;
+    spellFailed = false;
+    bonusNotice = null;
     shownRank = 1;
     enemies = [];
     recycleAll(playerBullets, pools.playerBullets);
@@ -237,15 +344,17 @@
     clearWaves = [];
     player = { x: W / 2, y: H - 90, r: 3.5, cooldown: 0, specialCooldown: 0, missileSide: 1, invincible: 1.5, character };
     state = "playing";
+    ui.overlay.classList.remove("stage-clear-drop");
     ui.overlay.classList.add("hidden");
     syncUI();
   }
 
   function syncUI() {
     ui.score.textContent = pad(score);
-    ui.high.textContent = pad(Math.max(score, highScore));
-    ui.lives.textContent = lives > 0 ? Array(lives).fill("◆").join(" ") : "—";
-    ui.lives.setAttribute("aria-label", `${lives} lives`);
+    ui.high.textContent = pad(practiceMode ? highScore : Math.max(score, highScore));
+    ui.lives.textContent = practiceMode ? "∞" : lives > 0 ? Array(lives).fill("◆").join(" ") : "—";
+    ui.lives.setAttribute("aria-label", practiceMode ? "Infinite lives in practice mode" : `${lives} lives`);
+    ui.livesLost.textContent = practiceMode ? String(Math.max(0, practiceDeaths - practiceLifeGains)) : "—";
     ui.graze.textContent = String(graze).padStart(3, "0");
     ui.power.textContent = power >= 100 ? "P MAX" : `P ${(power / 25).toFixed(2)}`;
     ui.bombs.textContent = bombs > 0 ? Array(bombs).fill("●").join(" ") : "—";
@@ -262,7 +371,7 @@
     const difficulty = Math.min(1, elapsed / 75);
     const typeRoll = Math.random();
     const type = forcedType || (typeRoll < .54 ? "drifter" : typeRoll < .86 ? "swooper" : "caster");
-    const hp = type === "caster" ? 16 : type === "swooper" ? 7 : 5;
+    const hp = (type === "caster" ? 16 : type === "swooper" ? 7 : 5) * stageProfile().enemyHpScale;
     enemies.push({
       x, y, r: type === "caster" ? 17 : 13,
       hp, maxHp: hp, type, age: 0, shot: .45 + Math.random() * .8,
@@ -288,7 +397,7 @@
     const center = minCenter + Math.random() * (maxCenter - minCenter);
     for (let i = 0; i < count; i++) {
       const column = i - (count - 1) / 2;
-      const hp = .6;
+      const hp = .6 * stageProfile().enemyHpScale;
       enemies.push({
         x: clamp(center + column * spacing, 24, W - 24),
         y: -28 - (shape === "v" ? Math.abs(column) * 16 : (i % 2) * 9),
@@ -313,6 +422,7 @@
     const speed = 105 + Math.min(45, elapsed * .5);
     const rank = difficultyRank();
     enemy.volley++;
+    playSound("enemyShot");
     const addBullet = (shotAngle, shotSpeed, kind) => {
       if (enemyBullets.length < settings.maxBullets) {
         enemyBullets.push(makeEnemyBullet(enemy.x, enemy.y, shotAngle, shotSpeed, kind));
@@ -343,8 +453,45 @@
     const settings = difficultySettings();
     return Object.assign(takeFrom(pools.enemyBullets), {
       x, y, vx: Math.cos(angle) * speed * settings.speed, vy: Math.sin(angle) * speed * settings.speed,
-      r: (radii[kind] || 5) * settings.size, kind, grazed: false
+      r: (radii[kind] || 5) * settings.size, kind, grazed: false, age: 0, behavior: null,
+      baseVx: 0, baseVy: 0, behaviorStep: 0
     });
+  }
+
+  function updateEnemyBulletBehavior(bullet, dt) {
+    bullet.age += dt;
+    const behavior = bullet.behavior;
+    if (!behavior) return;
+    if (behavior.type === "curve" && bullet.age < behavior.until) {
+      const angle = behavior.turn * dt;
+      const vx = bullet.vx;
+      bullet.vx = vx * Math.cos(angle) - bullet.vy * Math.sin(angle);
+      bullet.vy = vx * Math.sin(angle) + bullet.vy * Math.cos(angle);
+    } else if (behavior.type === "redirect") {
+      const nextTime = behavior.times[bullet.behaviorStep];
+      if (nextTime !== undefined && bullet.age >= nextTime) {
+        const speed = Math.hypot(bullet.vx, bullet.vy);
+        const angle = Math.atan2(player.y - bullet.y, player.x - bullet.x);
+        bullet.vx = Math.cos(angle) * speed;
+        bullet.vy = Math.sin(angle) * speed;
+        bullet.behaviorStep++;
+      }
+    } else if (behavior.type === "freeze") {
+      if (bullet.age >= behavior.start && bullet.age < behavior.start + behavior.duration) {
+        bullet.vx = bullet.vy = 0;
+      } else if (bullet.age >= behavior.start + behavior.duration && bullet.vx === 0 && bullet.vy === 0) {
+        bullet.vx = bullet.baseVx * 1.28;
+        bullet.vy = bullet.baseVy * 1.28;
+      }
+    } else if (behavior.type === "mirror" && bullet.behaviorStep === 0 &&
+      ((bullet.baseVx > 0 && bullet.x >= behavior.wall) || (bullet.baseVx < 0 && bullet.x <= behavior.wall))) {
+      bullet.vx *= -1;
+      bullet.behaviorStep = 1;
+    } else if (behavior.type === "reverse" && bullet.behaviorStep === 0 && bullet.age >= behavior.at) {
+      bullet.vx *= -1.12;
+      bullet.vy *= -1.12;
+      bullet.behaviorStep = 1;
+    }
   }
 
   function burst(x, y, color, amount = 12) {
@@ -407,7 +554,8 @@
     score += awarded;
     pointValue += awarded;
     while (pointValue >= nextLifePointTarget) {
-      lives++;
+      if (practiceMode) practiceLifeGains++;
+      else lives++;
       nextLifePointTarget += LIFE_POINT_STEP;
     }
   }
@@ -416,10 +564,12 @@
     if (item.collected) return;
     item.collected = true;
     if (item.kind === "power") {
+      playSound("powerPickup");
       addPower(item.value);
       if (!item.recovered) score += 100;
       burst(item.x, item.y, "#ef596b", 7);
     } else {
+      playSound("pickup");
       addPointValue(item.value, collectionY);
       burst(item.x, item.y, "#64c8ff", 7);
     }
@@ -469,10 +619,24 @@
   function defeatEnemy(enemy, color) {
     if (enemy.rewarded) return;
     enemy.rewarded = true;
+    playSound("enemyDown");
     score += enemy.value;
     dropLoot(enemy);
     burst(enemy.x, enemy.y, color || (enemy.type === "caster" ? "#d5a8ff" : "#f0bd6a"), 18);
     syncUI();
+  }
+
+  function launchItemsToPlayer() {
+    for (const item of items) {
+      if (item.collected) continue;
+      const angle = Math.atan2(player.y - item.y, player.x - item.x);
+      const speed = 390 + Math.random() * 90;
+      item.vx = Math.cos(angle) * speed;
+      item.vy = Math.sin(angle) * speed;
+      item.age = Math.max(item.age, .5);
+      item.collectAfter = 0;
+      item.autoCollect = true;
+    }
   }
 
   function globalClear(keepLivingBoss = true) {
@@ -488,8 +652,14 @@
     for (const bullet of playerBullets) burst(bullet.x, bullet.y, "#bcefff", 2);
     for (const missile of missiles) burst(missile.x, missile.y, "#ffad63", 6);
     for (const enemy of enemies) {
+      if (!enemy.rewarded) {
+        enemy.rewarded = true;
+        score += enemy.value;
+        dropLoot(enemy);
+      }
       burst(enemy.x, enemy.y, enemy.type === "caster" ? "#d5a8ff" : "#f07882", enemy.type === "swarm" ? 11 : 18);
     }
+    if (enemies.length) playSound("enemyDown");
     if (boss) {
       const bossDefeated = !keepLivingBoss;
       burst(boss.x, boss.y, bossDefeated ? "#fff0a6" : "#dc9cff", bossDefeated ? 64 : 30);
@@ -501,8 +671,7 @@
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
     enemies = [];
-    for (const item of items) collectItem(item, 0);
-    items = [];
+    launchItemsToPlayer();
     if (!keepLivingBoss) boss = null;
     if (!boss) ui.bossHud.classList.add("hidden");
     syncUI();
@@ -511,8 +680,8 @@
   function updateBossHud() {
     if (!boss) return;
     const specialtyGuard = boss.hp / boss.maxHp <= .2;
-    ui.bossName.textContent = globalThis.STG_STAGE.bossName;
-    const phaseName = boss.mode === "initial" ? "Initial encounter" : `Spell ${boss.cardIndex + 1} · ${SPELL_CARDS[boss.cardIndex].name}`;
+    ui.bossName.textContent = stageProfile().bossName;
+    const phaseName = boss.cardIndex < 0 ? "Initial encounter" : `Spell ${boss.cardIndex + 1} · ${activeCards[boss.cardIndex].name}`;
     ui.bossCard.textContent = specialtyGuard ? `${phaseName} · Specialty guard` : phaseName;
     ui.bossFill.style.width = `${clamp(boss.hp / boss.maxHp, 0, 1) * 100}%`;
     ui.bossFill.style.background = specialtyGuard ? "linear-gradient(90deg, #7350a2, #9eeaff)" : "linear-gradient(90deg, #eb4d5c, #e5bd6b)";
@@ -521,60 +690,154 @@
 
   function startBoss(encounter) {
     globalClear(false);
+    playSound("boss");
+    activeCards = availableCards(encounter);
     const cardIndex = encounter === "final" ? 0 : -1;
-    const maxHp = encounter === "final" ? SPELL_CARDS[0].hp : globalThis.STG_STAGE.initialBossHp;
+    const maxHp = encounter === "final" ? activeCards[0].hp : stageProfile().initialBossHp;
     boss = {
       x: W / 2, y: -48, targetY: 112, r: 27,
       hp: maxHp, maxHp, mode: encounter, cardIndex,
       age: 0, patternClock: .8, secondaryClock: 1.5, volley: 0,
       entering: true
     };
+    spellFailed = false;
     updateBossHud();
   }
 
+  function spellCardBonus(cardIndex) {
+    const multiplier = { easy: .8, normal: 1, hard: 1.35, lunatic: 1.75 }[difficulty];
+    const base = 10000 + stageIndex * 5000 + (cardIndex + 1) * 2500;
+    return Math.round(base * multiplier / 500) * 500;
+  }
+
+  function awardSpellCardBonus(cardIndex) {
+    if (cardIndex < 0) return;
+    if (spellFailed) {
+      bonusNotice = { title: "SPELL FAILED", detail: "Death or bomb used", life: 2.2, maxLife: 2.2, color: "#ef7588" };
+      return;
+    }
+    const bonus = spellCardBonus(cardIndex);
+    score += bonus;
+    stageSpellBonus += bonus;
+    bonusNotice = { title: "SPELL CARD CAPTURED", detail: `+${pad(bonus)}`, life: 2.4, maxLife: 2.4, color: "#ffe090" };
+  }
+
+  function renderStageResult(progress, complete = false) {
+    if (!stageResult) return;
+    const eased = 1 - Math.pow(1 - clamp(progress, 0, 1), 3);
+    const counted = value => pad(Math.floor(value * eased));
+    const practiceResult = practiceMode ? `<br>Net lives lost&nbsp;&nbsp;${Math.max(0, practiceDeaths - practiceLifeGains)}` : "";
+    ui.copy.innerHTML = `Spell card bonus&nbsp;&nbsp;${counted(stageResult.spellBonus)}<br>` +
+      `Additional bonus&nbsp;&nbsp;${counted(stageResult.additionalBonus)}<br>` +
+      `Stage clear bonus&nbsp;${counted(stageResult.clearBonus)}<br>` +
+      `<b>Total bonus&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${counted(stageResult.totalBonus)}</b>${practiceResult}` +
+      (complete ? `<br><br>Final score: ${pad(score)} · Graze: ${graze}` : "");
+  }
+
+  function beginStageClear(defeatedAt) {
+    const difficultyMultiplier = { easy: .8, normal: 1, hard: 1.35, lunatic: 1.75 }[difficulty];
+    const stageGraze = graze - stageStartGraze;
+    const stockBonus = practiceMode ? 0 : lives * 3000;
+    const additionalBonus = stageGraze * 100 + bombs * 1000 + stockBonus;
+    const clearBonus = Math.round(25000 * (stageIndex + 1) * difficultyMultiplier / 500) * 500;
+    const totalBonus = stageSpellBonus + additionalBonus + clearBonus;
+    score += additionalBonus + clearBonus;
+    stageResult = { spellBonus: stageSpellBonus, additionalBonus, clearBonus, totalBonus, elapsed: 0 };
+    stageClearTimer = STAGE_CLEAR_DURATION;
+
+    shake = 20;
+    burst(defeatedAt.x, defeatedAt.y, "#fff2ad", 150);
+    burst(defeatedAt.x, defeatedAt.y, "#e794ff", 90);
+    clearWaves.push({ x: defeatedAt.x, y: defeatedAt.y, life: 1.25, maxLife: 1.25 });
+
+    ui.kicker.textContent = stageProfile().title;
+    ui.title.textContent = "Stage clear";
+    ui.choices.classList.add("hidden");
+    ui.difficultyPanel.classList.add("hidden");
+    ui.simulationOption.classList.add("hidden");
+    ui.practiceOption.classList.add("hidden");
+    ui.continueButton.classList.add("hidden");
+    renderStageResult(0);
+    ui.overlay.classList.add("hidden");
+    ui.overlay.classList.remove("stage-clear-drop");
+    void ui.overlay.offsetWidth;
+    ui.overlay.classList.add("stage-clear-drop");
+    ui.overlay.classList.remove("hidden");
+    syncUI();
+  }
+
   function finishStage() {
+    if (stageIndex + 1 < STAGES.length) {
+      playSound("stageClear");
+      ui.overlay.classList.add("hidden");
+      ui.overlay.classList.remove("stage-clear-drop");
+      stageIndex++;
+      stageTime = 0;
+      stageEventIndex = 0;
+      stageClearTimer = 0;
+      stageResult = null;
+      stageSpellBonus = 0;
+      stageStartGraze = graze;
+      activeCards = [];
+      player.x = W / 2;
+      player.y = H - 90;
+      player.invincible = 2.5;
+      burst(player.x, player.y, "#f5d681", 34);
+      syncUI();
+      return;
+    }
     state = "stageclear";
-    highScore = Math.max(highScore, score);
-    localStorage.setItem("starfall-high", highScore);
+    playSound("stageClear");
+    if (!practiceMode) {
+      highScore = Math.max(highScore, score);
+      localStorage.setItem("starfall-high", highScore);
+    }
     ui.kicker.textContent = "The spellstorm is quiet";
     ui.title.textContent = "Stage clear";
-    ui.copy.innerHTML = `Final score: ${pad(score)} · Graze: ${graze}<br>Choose a style to fly again.`;
+    renderStageResult(1, true);
     ui.choices.classList.remove("hidden");
     ui.difficultyPanel.classList.remove("hidden");
     ui.simulationOption.classList.remove("hidden");
+    ui.practiceOption.classList.remove("hidden");
     ui.continueButton.classList.add("hidden");
     ui.overlay.classList.remove("hidden");
   }
 
   function clearBossPhase() {
     if (!boss) return;
-    score += boss.mode === "initial" ? 5000 : 10000;
-    if (boss.mode === "initial") {
-      const defeatedAt = { x: boss.x, y: boss.y };
+    const defeatedMode = boss.mode;
+    const defeatedAt = { x: boss.x, y: boss.y };
+    const clearedCardIndex = boss.cardIndex;
+    playSound("phaseClear");
+    score += defeatedMode === "initial" ? 5000 : 10000;
+    awardSpellCardBonus(clearedCardIndex);
+    if (defeatedMode === "initial" && clearedCardIndex < 0 && activeCards.length === 0) {
       boss.hp = 0;
       globalClear(false);
       scatterBossPower(defeatedAt.x, defeatedAt.y, 6);
+      launchItemsToPlayer();
       return;
     }
 
-    const nextCard = boss.cardIndex + 1;
-    if (nextCard >= SPELL_CARDS.length) {
-      const defeatedAt = { x: boss.x, y: boss.y };
+    const nextCard = clearedCardIndex + 1;
+    if (nextCard >= activeCards.length) {
       boss.hp = 0;
       globalClear(false);
       scatterBossPower(defeatedAt.x, defeatedAt.y, 10);
-      stageClearTimer = 2.5;
+      launchItemsToPlayer();
+      if (defeatedMode === "final") beginStageClear(defeatedAt);
       return;
     }
     globalClear(true);
     boss.cardIndex = nextCard;
-    const card = SPELL_CARDS[boss.cardIndex];
+    const card = activeCards[boss.cardIndex];
     boss.hp = boss.maxHp = card.hp;
     boss.age = 0;
     boss.patternClock = .9;
     boss.secondaryClock = 1.4;
     boss.volley = 0;
     boss.entering = false;
+    spellFailed = false;
     updateBossHud();
   }
 
@@ -586,19 +849,51 @@
     if (boss.hp <= 0) clearBossPhase();
   }
 
-  function addBossBullet(angle, speed, kind) {
+  function addBossBullet(angle, speed, kind, behavior = null, x = boss.x, y = boss.y + 12) {
     if (!boss || enemyBullets.length >= difficultySettings().maxBullets) return;
-    enemyBullets.push(makeEnemyBullet(boss.x, boss.y + 12, angle, speed, kind));
+    playSound("enemyShot");
+    const bullet = makeEnemyBullet(x, y, angle, speed, kind);
+    bullet.age = 0;
+    bullet.behavior = behavior;
+    if (behavior) {
+      bullet.baseVx = bullet.vx;
+      bullet.baseVy = bullet.vy;
+    }
+    enemyBullets.push(bullet);
   }
 
   function aimedAtPlayer() {
     return Math.atan2(player.y - boss.y, player.x - boss.x);
   }
 
+  function emitRandomComets(baseCount, speedMin = 205, speedMax = 270) {
+    const count = baseCount + (difficulty === "hard" ? 1 : difficulty === "lunatic" ? 2 : 0);
+    for (let i = 0; i < count; i++) {
+      // Restrict the randomness to the downward hemisphere: the lane is
+      // unpredictable, but every comet is visible before it reaches the player.
+      const angle = Math.PI * (.18 + Math.random() * .64);
+      const speed = speedMin + Math.random() * (speedMax - speedMin);
+      addBossBullet(angle, speed, "bossLarge", null,
+        boss.x + (Math.random() - .5) * 54, boss.y + 8 + Math.random() * 12);
+    }
+  }
+
+  function emitNeedleBurst(direction, baseCount, spread = .1) {
+    const count = adjustedBulletCount(baseCount, 4);
+    for (let i = 0; i < count; i++) {
+      const angle = direction + (Math.random() - .5) * spread * 2;
+      const speed = 175 + Math.random() * 105;
+      addBossBullet(angle, speed, i % 3 ? "bossSmall" : "rice");
+    }
+  }
+
+  const stageTwoVolleyDelay = base => base * difficultySettings().interval * (difficulty === "normal" ? 1.12 : 1);
+  const stageTwoExtraLevel = () => DIFFICULTY_ORDER[difficulty];
+
   function updateBossPattern(dt) {
     boss.patternClock -= dt;
     boss.secondaryClock -= dt;
-    if (boss.mode === "initial") {
+    if (boss.mode === "initial" && boss.cardIndex < 0) {
       if (boss.patternClock > 0) return;
       const settings = difficultySettings();
       const pattern = boss.volley++ % 3;
@@ -617,7 +912,8 @@
     }
 
     const card = boss.cardIndex;
-    if (card === 0 && boss.patternClock <= 0) {
+    const pattern = activeCards[card].pattern;
+    if (pattern === "petal" && boss.patternClock <= 0) {
       const count = adjustedBulletCount(15, 9);
       const offset = boss.volley++ * .13;
       for (let i = 0; i < count; i++) {
@@ -625,7 +921,7 @@
         addBossBullet(i * Math.PI * 2 / count + offset, 92 + (i % 2) * 18, "bossMedium");
       }
       boss.patternClock = .7 * difficultySettings().interval;
-    } else if (card === 1 && boss.patternClock <= 0) {
+    } else if (pattern === "crossing" && boss.patternClock <= 0) {
       const sweep = Math.sin(boss.age * 1.7) * .82;
       const layers = difficultySettings().sweepLayers;
       const layerFactors = [1, .55, .78, .32];
@@ -637,24 +933,135 @@
         addBossBullet(Math.PI / 2 - sweep * factor, speed, kind);
       }
       boss.patternClock = .2 * difficultySettings().interval;
-    } else if (card === 2 && boss.patternClock <= 0) {
+    } else if (pattern === "orrery" && boss.patternClock <= 0) {
       const count = adjustedBulletCount(9, 5);
       const offset = boss.volley++ * .17;
       const aim = aimedAtPlayer();
-      let gap = Math.round((aim - offset) / (Math.PI * 2 / count));
+      // Keep the opening near the player's bearing, but do not cancel the
+      // ring's rotation. This makes the safe lane drift between volleys and
+      // lets the large bullets eventually cover every 360-degree sector.
+      let gap = Math.round(aim / (Math.PI * 2 / count));
       gap = ((gap % count) + count) % count;
       for (let i = 0; i < count; i++) {
         if (i === gap || i === (gap + 1) % count) continue;
         addBossBullet(i * Math.PI * 2 / count + offset, 72, "bossLarge");
       }
       boss.patternClock = .62 * difficultySettings().interval;
+    } else if ((pattern === "crescent" || pattern === "twinRecall") && boss.patternClock <= 0) {
+      const lanes = adjustedBulletCount(pattern === "twinRecall" ? 11 : 9, 7);
+      const curve = boss.volley++ % 2 ? 1 : -1;
+      for (let i = 0; i < lanes; i++) {
+        const angle = Math.PI / 2 + (i - (lanes - 1) / 2) * .15;
+        addBossBullet(angle, 95 + Math.abs(i - lanes / 2) * 5, i % 2 ? "rice" : "star",
+          { type: "curve", turn: curve * (pattern === "twinRecall" ? 1.05 : .65), until: 1.35 });
+      }
+      // A delayed counter-curve crosses the first crescent instead of leaving
+      // the opposite half of the playfield permanently safe.
+      if (stageTwoExtraLevel() >= 2 && boss.volley % 2 === 0) {
+        emitFan(aimedAtPlayer() - curve * .38, bossFanCount(5), .2, angle =>
+          addBossBullet(angle, 126, "bossSmall", { type: "curve", turn: -curve * .48, until: 1.05 }));
+      }
+      if (pattern === "twinRecall") {
+        const aim = aimedAtPlayer();
+        emitFan(aim, bossFanCount(3), .25, angle => addBossBullet(angle, 112, "bossMedium", { type: "redirect", times: [1, 2] }));
+      }
+      boss.patternClock = stageTwoVolleyDelay(.62);
+    } else if (pattern === "secondEcho" && boss.patternClock <= 0) {
+      const count = adjustedBulletCount(10, 7);
+      const side = boss.volley++ % 2 ? 1 : -1;
+      const aim = aimedAtPlayer();
+      emitFan(aim + side * .28, count, .14, angle => addBossBullet(angle, 92, "star", { type: "redirect", times: [.78, 1.55] }));
+      emitFan(aim - side * .42, Math.max(3, bossFanCount(3)), .22, angle => addBossBullet(angle, 132, "rice", { type: "curve", turn: side * .38, until: 1.15 }));
+      // The redirect is the card's identity; noisy needle support belongs to
+      // Hard/Lunatic so Normal retains room to read the second redirection.
+      if (stageTwoExtraLevel() >= 2) {
+        emitNeedleBurst(aim - side * .12, difficulty === "hard" ? 5 : 8, .09);
+      }
+      boss.patternClock = stageTwoVolleyDelay(.78);
+    } else if (pattern === "lattice" && boss.patternClock <= 0) {
+      const rows = difficulty === "easy" ? 3 : difficulty === "normal" ? 4 : 5;
+      const columns = difficulty === "lunatic" ? 9 : 7;
+      const gap = boss.volley++ % columns;
+      for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+        if (column === gap && row === 0) continue;
+        const stagger = row % 2 ? (W - 68) / (columns - 1) * .42 : 0;
+        const x = 34 + column * (W - 68) / (columns - 1) + stagger;
+        if (x >= W - 20) continue;
+        const slant = (row % 3 - 1) * .1 + Math.sin(boss.volley * .7) * .045;
+        addBossBullet(Math.PI / 2 + slant, 84 + row * 18, row % 2 ? "shard" : "rice", null, x, boss.y - row * 21);
+      }
+      if (stageTwoExtraLevel() >= 2) {
+        emitFan(aimedAtPlayer(), difficulty === "hard" ? 3 : 7, .19,
+          angle => addBossBullet(angle, 142, "bossSmall"));
+      } else if (difficulty === "normal" && boss.volley % 2 === 0) {
+        addBossBullet(aimedAtPlayer(), 132, "bossSmall");
+      }
+      boss.patternClock = stageTwoVolleyDelay(.92);
+    } else if (pattern === "freeze" && boss.patternClock <= 0) {
+      const count = adjustedBulletCount(17, 11);
+      const spread = Math.PI * 1.15;
+      for (let i = 0; i < count; i++) {
+        const angle = Math.PI / 2 - spread / 2 + spread * i / (count - 1);
+        addBossBullet(angle, 108, i % 3 ? "bossSmall" : "star", { type: "freeze", start: .62, duration: .72 });
+      }
+      const offsetAim = aimedAtPlayer() + (boss.volley++ % 2 ? .34 : -.34);
+      emitFan(offsetAim, Math.max(3, bossFanCount(3)), .2, angle =>
+        addBossBullet(angle, 148, "rice", { type: "freeze", start: .42, duration: .72 }));
+      // Comets are supporting pressure, not part of the freeze mechanic.
+      // Normal receives only an occasional single comet; Hard/Lunatic layer
+      // several randomized lanes over the stopped constellation.
+      if (difficulty === "normal" && boss.volley % 2 === 0) emitRandomComets(1, 205, 255);
+      else if (difficulty === "hard") emitRandomComets(3, 215, 275);
+      else if (difficulty === "lunatic") emitRandomComets(4, 225, 290);
+      boss.patternClock = stageTwoVolleyDelay(.88);
+    } else if (pattern === "mirror" && boss.patternClock <= 0) {
+      const count = adjustedBulletCount(8, 6);
+      const targetY = H * (.56 + (boss.volley++ % 3) * .1);
+      for (let i = 0; i < count; i++) {
+        const y = boss.y + 12 + i * 18;
+        const leftAngle = Math.atan2(targetY - y, W * .52);
+        const rightAngle = Math.atan2(targetY - y, -W * .52);
+        addBossBullet(leftAngle, 122 + i * 3, "shard", { type: "mirror", wall: W / 2 }, 18, y);
+        addBossBullet(rightAngle, 122 + i * 3, "shard", { type: "mirror", wall: W / 2 }, W - 18, y);
+      }
+      if (difficulty === "normal") {
+        if (boss.volley % 2 === 0) addBossBullet(aimedAtPlayer(), 142, "bossMedium");
+        if (boss.volley % 2 === 0) emitRandomComets(1, 215, 270);
+      } else {
+        emitFan(aimedAtPlayer(), difficulty === "hard" ? 3 : 7, .17,
+          angle => addBossBullet(angle, 154, "bossMedium"));
+        emitRandomComets(difficulty === "hard" ? 4 : 5, 225, 300);
+      }
+      boss.patternClock = stageTwoVolleyDelay(.72);
+    } else if (pattern === "reversal" && boss.patternClock <= 0) {
+      const count = adjustedBulletCount(19, 13);
+      const offset = boss.volley++ * .27;
+      for (let i = 0; i < count; i++) addBossBullet(i * Math.PI * 2 / count + offset, 105 + i % 3 * 9, i % 2 ? "rice" : "bossMedium", { type: "reverse", at: .92 + i % 3 * .1 });
+      emitFan(aimedAtPlayer() + Math.sin(boss.volley) * .25, Math.max(3, bossFanCount(5)), .16,
+        angle => addBossBullet(angle, 158, "bossSmall", { type: "curve", turn: boss.volley % 2 ? .32 : -.32, until: 1.2 }));
+      if (difficulty === "lunatic") {
+        emitNeedleBurst(aimedAtPlayer() - Math.sin(boss.volley * .7) * .18, 8, .11);
+      } else if (difficulty === "hard" && boss.volley % 2 === 0) {
+        emitNeedleBurst(aimedAtPlayer(), 5, .08);
+      }
+      boss.patternClock = stageTwoVolleyDelay(.64);
     }
 
     if (boss.secondaryClock <= 0) {
       const aimed = aimedAtPlayer();
-      const count = card === 2 ? bossFanCount(5) : difficultySettings().fanCount;
-      emitFan(aimed, count, card === 2 ? .21 : .24, angle => addBossBullet(angle, card === 2 ? 138 : 128, card === 0 ? "bossSmall" : "bossMedium"));
-      boss.secondaryClock = (card === 1 ? 1.7 : 2.1) * difficultySettings().interval;
+      const stageTwoCard = stageIndex === 1;
+      const allowStageTwoSupport = !stageTwoCard || difficulty === "lunatic" ||
+        (difficulty === "hard" && boss.volley % 2 === 0) ||
+        (difficulty === "normal" && boss.volley % 3 === 0);
+      const count = pattern === "orrery" ? bossFanCount(5) :
+        stageTwoCard ? (difficulty === "normal" ? 1 : difficultySettings().fanCount) : difficultySettings().fanCount;
+      const crossOffset = stageTwoCard ? (boss.volley % 2 ? .31 : -.31) : 0;
+      if (allowStageTwoSupport) {
+        emitFan(aimed + crossOffset, count, pattern === "orrery" ? .21 : .24,
+          angle => addBossBullet(angle, pattern === "orrery" ? 138 : stageTwoCard ? 142 : 128,
+            pattern === "petal" ? "bossSmall" : "bossMedium"));
+      }
+      boss.secondaryClock = (pattern === "crossing" ? 1.7 : stageTwoCard ? 1.5 : 2.1) * difficultySettings().interval;
     }
   }
 
@@ -677,18 +1084,17 @@
   }
 
   function updateStage(dt) {
-    if (stageClearTimer > 0) {
+    if (stageResult) {
+      stageResult.elapsed += dt;
       stageClearTimer -= dt;
-      if (stageClearTimer <= 0) {
-        for (const item of items) collectItem(item, 0);
-        items = [];
-        syncUI();
+      renderStageResult(stageResult.elapsed / STAGE_CLEAR_DURATION);
+      if (stageClearTimer <= 0 && items.length === 0) {
         finishStage();
       }
       return;
     }
     if (!boss) stageTime += dt;
-    const event = STAGE_PROFILE[stageEventIndex];
+    const event = stageProfile().events[stageEventIndex];
     if (!event || stageTime < event.at || boss) return;
     stageEventIndex++;
     if (event.type === "formation") spawnSwarm(event.count, event.shape);
@@ -717,6 +1123,7 @@
   function launchReimuMissiles(tier) {
     const initialTarget = nearestEnemy(player.x, player.y);
     if (!initialTarget) return;
+    playSound("special");
     const count = tier >= 3 ? 2 : 1;
     for (let i = 0; i < count; i++) {
       const side = count === 2 ? (i ? 1 : -1) : player.missileSide;
@@ -739,6 +1146,7 @@
   }
 
   function emitMarisaLasers(tier) {
+    playSound("special");
     const offsets = tier >= 3 ? [-10, 10] : [0];
     const width = 3.5 + tier * .7;
     const laserDamage = .1 + tier * .035;
@@ -760,8 +1168,10 @@
   }
 
   function useBomb() {
-    if (state !== "playing" || bombs <= 0 || bombWave > 0) return;
+    if (state !== "playing" || stageResult || bombs <= 0 || bombWave > 0) return;
+    if (boss && boss.cardIndex >= 0) spellFailed = true;
     bombs--;
+    playSound("bomb");
     redeemExcessPower();
     bombWave = 1;
     player.invincible = 1.6;
@@ -780,11 +1190,14 @@
 
   function hitPlayer(clearEnemyShots = true) {
     if (player.invincible > 0) return;
-    lives--;
+    playSound("hit");
+    if (boss && boss.cardIndex >= 0) spellFailed = true;
+    if (practiceMode) practiceDeaths++;
+    else lives--;
     const lostPower = Math.min(power, 25);
     power -= lostPower;
     excessPower = 0;
-    if (lives > 0) scatterLostPower(player.x, player.y, lostPower);
+    if (practiceMode || lives > 0) scatterLostPower(player.x, player.y, lostPower);
     bombs = 2;
     shake = 12;
     burst(player.x, player.y, "#f04f64", 28);
@@ -792,7 +1205,7 @@
     recycleAll(playerBullets, pools.playerBullets);
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
-    if (lives <= 0) {
+    if (!practiceMode && lives <= 0) {
       highScore = Math.max(highScore, score);
       localStorage.setItem("starfall-high", highScore);
       state = "gameover";
@@ -802,6 +1215,7 @@
       ui.choices.classList.remove("hidden");
       ui.difficultyPanel.classList.remove("hidden");
       ui.simulationOption.classList.remove("hidden");
+      ui.practiceOption.classList.remove("hidden");
       ui.continueButton.classList.add("hidden");
       ui.bossHud.classList.add("hidden");
       ui.overlay.classList.remove("hidden");
@@ -834,7 +1248,7 @@
     bombWave = Math.max(0, bombWave - dt);
 
     const powerTier = Math.floor(power / 25);
-    const firing = keys.has("KeyZ") || keys.has("KeyJ");
+    const firing = !stageResult && (keys.has("KeyZ") || keys.has("KeyJ"));
     if (firing && player.cooldown <= 0) {
       if (playerBullets.length < MAX_PLAYER_BULLETS) {
         addPlayerShot(player.x - 6, player.y - 14, 0, -520, ship);
@@ -845,6 +1259,7 @@
         }
         if (powerTier >= 3) addPlayerShot(player.x, player.y - 19, 0, -560, ship);
       }
+      playSound("shoot");
       player.cooldown = ship.cooldown;
     }
 
@@ -952,6 +1367,7 @@
     let struckByBullet = false;
     const canHitPlayer = player.invincible <= 0;
     for (const b of enemyBullets) {
+      updateEnemyBulletBehavior(b, dt);
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       if (!canHitPlayer) continue;
@@ -977,14 +1393,22 @@
       recycleAll(enemyBullets, pools.enemyBullets);
     } else {
       compactAndRecycle(enemyBullets, pools.enemyBullets, activeEnemyBullet);
-      if (grazedThisFrame) syncUI();
+      if (grazedThisFrame) {
+        playSound("graze");
+        syncUI();
+      }
     }
 
     for (const item of items) {
       item.age += dt;
       const distance = Math.sqrt(dist2(item, player));
-      // Preserve the arcade-style pop before any item begins homing.
-      if (item.age > .38 && (distance < 105 || player.y < 115)) {
+      if (item.autoCollect) {
+        const angle = Math.atan2(player.y - item.y, player.x - item.x);
+        const step = Math.min(distance, 520 * dt);
+        item.x += Math.cos(angle) * step;
+        item.y += Math.sin(angle) * step;
+      // Preserve the arcade-style pop before an ordinary item begins homing.
+      } else if (item.age > .38 && (distance < 105 || player.y < 115)) {
         const angle = Math.atan2(player.y - item.y, player.x - item.x);
         item.x += Math.cos(angle) * 270 * dt;
         item.y += Math.sin(angle) * 270 * dt;
@@ -994,7 +1418,7 @@
         item.y += item.vy * dt;
         item.vx *= Math.pow(.35, dt);
       }
-      if (distance < 17 && item.age >= item.collectAfter) {
+      if (Math.sqrt(dist2(item, player)) < 17 && item.age >= item.collectAfter) {
         collectItem(item, item.y);
         syncUI();
       }
@@ -1007,6 +1431,10 @@
     compactAndRecycle(particles, pools.particles, activeParticle);
     for (const wave of clearWaves) wave.life -= dt;
     compactInPlace(clearWaves, activeClearWave);
+    if (bonusNotice) {
+      bonusNotice.life -= dt;
+      if (bonusNotice.life <= 0) bonusNotice = null;
+    }
   }
 
   function drawBackground(time) {
@@ -1062,21 +1490,26 @@
 
   function drawBoss() {
     if (!boss) return;
+    const isMizuki = stageIndex === 1;
     ctx.save(); ctx.translate(boss.x, boss.y);
     ctx.globalAlpha = boss.entering ? clamp((boss.y + 48) / 120, 0, 1) : 1;
     ctx.rotate(boss.age * .18);
-    ctx.strokeStyle = "rgba(226, 190, 255, .38)"; ctx.lineWidth = 2;
+    ctx.strokeStyle = isMizuki ? "rgba(132, 238, 255, .46)" : "rgba(226, 190, 255, .38)"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(0, 0, 36 + Math.sin(boss.age * 2) * 3, 0, Math.PI * 2); ctx.stroke();
-    ctx.shadowColor = "#b36fe0"; ctx.shadowBlur = 22;
-    ctx.fillStyle = "#6f3f91"; ctx.beginPath();
+    ctx.shadowColor = isMizuki ? "#55d7e8" : "#b36fe0"; ctx.shadowBlur = 22;
+    ctx.fillStyle = isMizuki ? "#247b91" : "#6f3f91"; ctx.beginPath();
     for (let i = 0; i < 16; i++) {
       const angle = i * Math.PI / 8;
-      const radius = i % 2 ? 19 : 29;
+      const radius = i % 2 ? (isMizuki ? 15 : 19) : 29;
       ctx.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
     }
     ctx.closePath(); ctx.fill();
     ctx.rotate(-boss.age * .36);
-    ctx.fillStyle = "#e95d82"; ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = isMizuki ? "#f0b84d" : "#e95d82"; ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI * 2); ctx.fill();
+    if (isMizuki) {
+      ctx.strokeStyle = "#fff1ae"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -13); ctx.moveTo(0, 0); ctx.lineTo(10, 5); ctx.stroke();
+    }
     ctx.shadowColor = "white"; ctx.shadowBlur = 8; ctx.fillStyle = "white";
     ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = "#281432"; ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2); ctx.fill();
@@ -1192,6 +1625,22 @@
     }
     for (const p of particles) { ctx.globalAlpha = Math.max(0, p.life / p.max); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size); }
     ctx.globalAlpha = 1;
+    if (bonusNotice) {
+      const alpha = Math.min(1, bonusNotice.life * 2, (bonusNotice.maxLife - bonusNotice.life) * 4);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = "center";
+      ctx.shadowColor = bonusNotice.color;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = bonusNotice.color;
+      ctx.font = "700 22px Georgia, serif";
+      ctx.fillText(bonusNotice.title, W / 2, 188);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#fff";
+      ctx.font = "10px SFMono-Regular, Consolas, monospace";
+      ctx.fillText(bonusNotice.detail, W / 2, 208);
+      ctx.restore();
+    }
     if (bombWave > 0 && player) {
       const radius = (1 - bombWave) * 540;
       ctx.strokeStyle = `rgba(142, 235, 255, ${bombWave * .75})`;
@@ -1232,20 +1681,25 @@
 
   function continueGame() {
     if (state === "paused") {
+      unlockAudio();
+      playSound("menu");
       state = "playing";
       ui.overlay.classList.add("hidden");
     }
   }
 
   addEventListener("keydown", e => {
+    unlockAudio();
     if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyZ", "KeyJ", "KeyX", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight", "Escape"].includes(e.code)) e.preventDefault();
     if (e.code === "KeyX" && !e.repeat) useBomb();
     else if (e.code === "Escape" && (state === "playing" || state === "paused")) {
       state = state === "playing" ? "paused" : "playing";
+      playSound(state === "paused" ? "pause" : "menu");
       ui.kicker.textContent = "A moment between spells"; ui.title.textContent = "Paused"; ui.copy.innerHTML = "Catch your breath.<br>Press Esc to continue.";
       ui.choices.classList.add("hidden");
       ui.difficultyPanel.classList.add("hidden");
       ui.simulationOption.classList.add("hidden");
+      ui.practiceOption.classList.add("hidden");
       ui.continueButton.classList.remove("hidden");
       ui.overlay.classList.toggle("hidden", state === "playing");
     }
@@ -1254,6 +1708,8 @@
   addEventListener("keyup", e => keys.delete(e.code));
   addEventListener("blur", () => keys.clear());
   ui.difficultyButtons.forEach(button => button.addEventListener("click", () => {
+    unlockAudio();
+    playSound("menu");
     selectedDifficulty = button.dataset.difficulty;
     ui.difficultyButtons.forEach(option => option.classList.toggle("active", option === button));
   }));
@@ -1261,11 +1717,11 @@
   ui.continueButton.addEventListener("click", continueGame);
   document.querySelectorAll("[data-key]").forEach(button => {
     const code = button.dataset.key;
-    const down = e => { e.preventDefault(); keys.add(code); };
+    const down = e => { e.preventDefault(); unlockAudio(); keys.add(code); };
     const up = e => { e.preventDefault(); keys.delete(code); };
     button.addEventListener("pointerdown", down); button.addEventListener("pointerup", up); button.addEventListener("pointercancel", up); button.addEventListener("pointerleave", up);
   });
-  document.querySelector("[data-action='bomb']").addEventListener("pointerdown", e => { e.preventDefault(); useBomb(); });
+  document.querySelector("[data-action='bomb']").addEventListener("pointerdown", e => { e.preventDefault(); unlockAudio(); useBomb(); });
 
   syncUI();
   requestAnimationFrame(loop);

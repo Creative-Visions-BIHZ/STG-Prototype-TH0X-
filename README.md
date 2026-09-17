@@ -62,6 +62,11 @@ performs multiple simulation updates per rendered frame, so movement and firing 
 their intended rates. The optional **FPS-synced slowdown** setting instead performs one
 1/60-second update per rendered frame, intentionally slowing the game below 60 FPS.
 
+The optional **Practice** mode gives the player infinite lives while preserving the
+normal death penalties, recovery-item burst, and bomb reset. The HUD counts net lives
+lost as deaths minus life extends earned from point items (never displaying below zero).
+Practice scores are not saved as high scores.
+
 Marisa's lasers provide light piercing support damage; her ordinary focused fire remains
 the primary source of boss damage. Boss and spell-card HP are configured in
 `stage-profile.js` for straightforward balance tuning.
@@ -75,11 +80,11 @@ missiles require a current target and expire after traveling 62% of the playfiel
 height. Profiled formations contain normal-sized one-shot enemies, creating pressure
 through positioning and numbers rather than extra health.
 
-## Stage profile
+## Stage profiles
 
-`stage-profile.js` records timed formation and boss events. Stage time pauses
+`stage-profile.js` records two sequential stages with timed formation and boss events. Stage time pauses
 during boss encounters, so later events cannot overlap an unfinished boss phase. The
-stage contains an introductory boss encounter followed by three final spell cards:
+first stage contains an introductory boss encounter followed by three final spell cards:
 
 The opening section lasts 51 active stage seconds, followed by another extended enemy
 section before the final boss at stage-second 90. Mixed groups provide several caster
@@ -89,13 +94,26 @@ enemies so both characters can develop their power-specific weapons before each 
 - **Crossing Stars** — mirrored sweeping lanes with aimed interruptions
 - **Last Light of the Orrery** — slow large-bullet walls with player-facing gaps
 
+Stage 2, **Palace of Bent Time**, uses closer wave spacing and enemies with 68% of the
+first stage's health. Its boss is **Mizuki, Keeper of the Second Hand**. The initial
+encounter has 0/1/1/2 spell cards on Easy/Normal/Hard/Lunatic; the finale has 3/4/5/5.
+Its named patterns use curved lanes, two timed redirects, bullet lattices, synchronized
+freezing and release, mirrored formations, and velocity reversal instead of uniform
+radial-ring variants.
+
 Entering the initial encounter, clearing a spell card, and defeating a boss all invoke
 the same global-clear operation. It removes bullets and ordinary enemies, preserves a
-living boss between cards, and immediately collects every item on screen. Cleared
-enemies and projectiles burst individually before an expanding clear wave crosses the
-field; boss defeats and spell-card breaks receive larger phase-specific explosions.
+living boss between cards, and launches every item toward the player for visible
+collection. Cleared enemies and projectiles burst individually, cleared enemies release
+their normal loot, and an expanding clear wave crosses the field. Boss defeats and
+spell-card breaks receive larger phase-specific explosions.
 The introductory and final boss defeats then release their own power-item showers; the
 final shower remains collectible for a short victory window before stage-clear results.
+
+Clearing a spell card without dying or bombing awards a difficulty-scaled capture
+bonus. Each stage ends with a large boss explosion and a descending result screen that
+counts the accumulated spell-card captures, an additional graze/stock/bomb bonus, the
+stage-clear bonus, and their combined total before continuing.
 
 High-churn combat objects use reusable pools for hostile bullets, player shots,
 missiles, laser pulses, and particles. Active arrays are compacted in place to avoid
