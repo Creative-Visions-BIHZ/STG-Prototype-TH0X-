@@ -40,6 +40,13 @@ python3 -m http.server 8080
 
 Then visit `http://localhost:8080`.
 
+The title menu provides Story, Stage Practice, Spell Practice, and Records screens.
+Story runs proceed through every stage normally. Stage Practice exposes every stage,
+starts the player at full power with infinite lives, records net lives lost, and ends
+after the selected stage. Spell Practice filters cards by the chosen difficulty and
+starts directly at the selected card. High score, run/clear totals, spell captures,
+recorded deaths, and the best practice loss are saved in browser local storage.
+
 ## GitHub Pages deployment
 
 This dependency-free site is published directly from the root of the
@@ -137,14 +144,18 @@ Stage 3, **The Thunder Archive**, follows Stage 2 with tougher enemies and a mor
 durable midboss. Dedicated fencer enemies rapidly fire ordinary bullets from one
 fixed origin along one locked direction, forming a dotted line along their path.
 Some streams aim at the player's current position; others use fixed angled courses.
-The boss, **Raika, Warden of the Storm Seal**, uses long,
-stationary line and circular fences, fast large bullets, and laser beams. Fences and
-beams first show a harmless thin white guide for one second. Enemy bullets then trace
-the warned path; boss fences remain in place for about 1.65 seconds before disappearing,
-while lasers fire for about one second. Bombs, hits, and phase clears remove active
-and pending hazards. Only one boss laser may be warning or firing at a time;
-laser paths alternate between fixed lanes and once-locked near-player graze lanes.
-Higher difficulties add support fire, beams, and comets.
+The boss, **Raika, Warden of the Storm Seal**, uses rapid dotted bullet lines, fields
+of countless slow random bullets, and several laser-focused spell cards. Ordinary
+bullet lines fire immediately without a warning. Rigid lasers show a harmless thin
+white guide for one second and then fire for about one second. Laser patterns use
+single fixed or once-locked graze lanes and synchronized vertical, fan, and opposing
+diagonal cross-hatch arrays with intentional escape lanes. A complete laser sequence must disappear before another can
+begin, and major volleys are separated by at least three seconds. Bombs, hits, and
+phase clears remove active and pending attacks. Higher difficulties add denser support
+fire while preserving the main pattern's gaps.
+
+The Stage 3 midboss now arrives at stage-second 34 after extra mixed, formation, and
+dotted-line waves; the longer second section brings the final encounter at stage-second 67.
 
 Entering the initial encounter, clearing a spell card, and defeating a boss all invoke
 the same global-clear operation. It removes bullets and ordinary enemies, preserves a

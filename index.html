@@ -25,30 +25,41 @@
           <div id="overlay" class="overlay">
             <div class="seal">✦</div>
             <p id="overlay-kicker" class="overlay-kicker">The night is restless</p>
-            <h2 id="overlay-title">Choose a style</h2>
-            <p id="overlay-copy">Two approaches to the same spellstorm.</p>
-            <div id="difficulty-buttons" class="difficulty-buttons" aria-label="Difficulty">
-              <button type="button" data-difficulty="easy">Easy</button>
-              <button type="button" data-difficulty="normal" class="active">Normal</button>
-              <button type="button" data-difficulty="hard">Hard</button>
-              <button type="button" data-difficulty="lunatic">Lunatic</button>
+            <h2 id="overlay-title">Starfall Shrine</h2>
+            <p id="overlay-copy">A chronicle written in spellfire.</p>
+            <div id="main-menu" class="menu-panel vertical-menu">
+              <button type="button" data-menu-mode="story">Start Story</button>
+              <button type="button" data-menu-mode="stage">Stage Practice</button>
+              <button type="button" data-menu-mode="spell">Spell Practice</button>
+              <button type="button" data-menu-screen="records">Records &amp; Save</button>
             </div>
-            <label id="simulation-option" class="simulation-option">
-              <input id="sync-simulation" type="checkbox" />
-              <span>FPS-synced slowdown</span>
-            </label>
-            <label id="practice-option" class="simulation-option">
-              <input id="practice-mode" type="checkbox" />
-              <span>Practice · infinite lives</span>
-            </label>
-            <div id="choice-buttons" class="choice-buttons">
-              <button type="button" data-character="reimu">
-                <span class="choice-key">A</span><b>Reimu</b><small>Wide · homing missiles</small>
-              </button>
-              <button type="button" data-character="marisa">
-                <span class="choice-key">B</span><b>Marisa</b><small>Fast · piercing lasers</small>
-              </button>
+            <div id="run-config" class="menu-panel hidden">
+              <div id="practice-selector" class="practice-selector hidden"></div>
+              <div id="difficulty-buttons" class="difficulty-buttons" aria-label="Difficulty">
+                <button type="button" data-difficulty="easy">Easy</button>
+                <button type="button" data-difficulty="normal" class="active">Normal</button>
+                <button type="button" data-difficulty="hard">Hard</button>
+                <button type="button" data-difficulty="lunatic">Lunatic</button>
+              </div>
+              <label id="simulation-option" class="simulation-option">
+                <input id="sync-simulation" type="checkbox" />
+                <span>FPS-synced slowdown</span>
+              </label>
+              <label id="practice-option" class="simulation-option hidden">
+                <input id="practice-mode" type="checkbox" />
+                <span>Practice · infinite lives</span>
+              </label>
+              <div id="choice-buttons" class="choice-buttons">
+                <button type="button" data-character="reimu">
+                  <span class="choice-key">A</span><b>Reimu</b><small>Wide · homing missiles</small>
+                </button>
+                <button type="button" data-character="marisa">
+                  <span class="choice-key">B</span><b>Marisa</b><small>Fast · piercing lasers</small>
+                </button>
+              </div>
+              <button id="menu-back" class="menu-back" type="button">← Back</button>
             </div>
+            <div id="records-panel" class="menu-panel records-panel hidden"></div>
             <button id="continue-button" class="single-action hidden" type="button">Continue <span>Esc</span></button>
           </div>
         </div>
