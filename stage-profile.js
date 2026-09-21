@@ -49,6 +49,32 @@ globalThis.STG_STAGES = Object.freeze([
       { name: "Refraction Sign — Split-Mirror Rain", hp: 620, pattern: "mirror", minDifficulty: "normal" },
       { name: "Last Word — Clockwork Reversal", hp: 700, pattern: "reversal", minDifficulty: "hard" }
     ])
+  }),
+  Object.freeze({
+    title: "Stage 3 · The Thunder Archive", bossName: "Raika, Warden of the Storm Seal",
+    enemyHpScale: 1.12, initialBossHp: 650,
+    events: Object.freeze([
+      { at: 1, type: "formation", count: 12, shape: "v" }, { at: 4, type: "mixed", count: 7 },
+      { at: 7, type: "fenceEnemy", count: 3, aimed: false },
+      { at: 11, type: "formation", count: 14, shape: "line" }, { at: 14, type: "fenceEnemy", count: 3, aimed: true },
+      { at: 18, type: "mixed", count: 8 }, { at: 21, type: "fenceEnemy", count: 4, aimed: false },
+      { at: 25, type: "boss", encounter: "initial" },
+      { at: 29, type: "formation", count: 14, shape: "v" }, { at: 32, type: "fenceEnemy", count: 4, aimed: true },
+      { at: 36, type: "mixed", count: 9 }, { at: 39, type: "fenceEnemy", count: 4, aimed: false },
+      { at: 43, type: "formation", count: 16, shape: "line" }, { at: 46, type: "fenceEnemy", count: 5, aimed: true },
+      { at: 50, type: "mixed", count: 9 }, { at: 54, type: "boss", encounter: "final" }
+    ]),
+    initialCards: Object.freeze([
+      { name: "Storm Gate — Warning Lattice", hp: 550, pattern: "stormGate", minDifficulty: "normal" },
+      { name: "Thunder Seal — Crossfire Decree", hp: 610, pattern: "crossfire", minDifficulty: "lunatic" }
+    ]),
+    finalCards: Object.freeze([
+      { name: "Barrier Sign — Falling Portcullis", hp: 640, pattern: "portcullis" },
+      { name: "Thunderbolt — White-Line Verdict", hp: 700, pattern: "verdict" },
+      { name: "Meteor Sign — Iron Hail", hp: 760, pattern: "ironHail" },
+      { name: "Seal Array — Caged Horizon", hp: 820, pattern: "cagedHorizon", minDifficulty: "normal" },
+      { name: "Last Storm — Circle of Judgment", hp: 900, pattern: "judgment", minDifficulty: "hard" }
+    ])
   })
 ]);
 

@@ -133,6 +133,19 @@ Its named patterns use curved lanes, two timed redirects, bullet lattices, synch
 freezing and release, mirrored formations, and velocity reversal instead of uniform
 radial-ring variants.
 
+Stage 3, **The Thunder Archive**, follows Stage 2 with tougher enemies and a more
+durable midboss. Dedicated fencer enemies rapidly fire ordinary bullets from one
+fixed origin along one locked direction, forming a dotted line along their path.
+Some streams aim at the player's current position; others use fixed angled courses.
+The boss, **Raika, Warden of the Storm Seal**, uses long,
+stationary line and circular fences, fast large bullets, and laser beams. Fences and
+beams first show a harmless thin white guide for one second. Enemy bullets then trace
+the warned path; boss fences remain in place for about 1.65 seconds before disappearing,
+while lasers fire for about one second. Bombs, hits, and phase clears remove active
+and pending hazards. Only one boss laser may be warning or firing at a time;
+laser paths alternate between fixed lanes and once-locked near-player graze lanes.
+Higher difficulties add support fire, beams, and comets.
+
 Entering the initial encounter, clearing a spell card, and defeating a boss all invoke
 the same global-clear operation. It removes bullets and ordinary enemies, preserves a
 living boss between cards, and launches every item toward the player for visible

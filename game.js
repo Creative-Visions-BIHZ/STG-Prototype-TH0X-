@@ -122,6 +122,7 @@
   let missiles = [];
   let lasers = [];
   let enemyBullets = [];
+  let hazards = [];
   let items = [];
   let particles = [];
   let clearWaves = [];
@@ -219,7 +220,7 @@
 
   function activeObjectCount() {
     return enemies.length + playerBullets.length + missiles.length + lasers.length +
-      enemyBullets.length + items.length + particles.length + clearWaves.length +
+      enemyBullets.length + hazards.length + items.length + particles.length + clearWaves.length +
       (boss ? 1 : 0) + (characterBomb ? 1 : 0);
   }
 
@@ -366,6 +367,7 @@
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
     recycleAll(enemyBullets, pools.enemyBullets);
+    hazards = [];
     items = [];
     recycleAll(particles, pools.particles);
     clearWaves = [];
@@ -398,11 +400,11 @@
     const difficulty = Math.min(1, elapsed / 75);
     const typeRoll = Math.random();
     const type = forcedType || (typeRoll < .54 ? "drifter" : typeRoll < .86 ? "swooper" : "caster");
-    const hp = (type === "caster" ? 16 : type === "swooper" ? 7 : 5) * stageProfile().enemyHpScale;
+    const hp = (type === "fencer" ? 12 : type === "caster" ? 16 : type === "swooper" ? 7 : 5) * stageProfile().enemyHpScale;
     enemies.push({
-      x, y, r: type === "caster" ? 17 : 13,
+      x, y, r: type === "caster" || type === "fencer" ? 17 : 13,
       hp, maxHp: hp, type, age: 0, shot: .45 + Math.random() * .8,
-      speed: (type === "caster" ? 44 : 70) + difficulty * 16,
+      speed: (type === "caster" || type === "fencer" ? 44 : 70) + difficulty * 16,
       seed: Math.random() * 10, volley: 0, value: hp * 120
     });
   }
@@ -412,6 +414,13 @@
     for (let i = 0; i < count; i++) {
       const type = i % 3 === 2 ? "caster" : i % 2 ? "swooper" : "drifter";
       spawnEnemy(type, spacing * (i + 1), -28 - i * 14);
+    }
+  }
+
+  function spawnFenceGroup(count, aimed) {
+    for (let i = 0; i < count; i++) {
+      spawnEnemy("fencer", W * (i + 1) / (count + 1), -35 - i * 26);
+      enemies[enemies.length - 1].aimedFence = aimed;
     }
   }
 
@@ -455,7 +464,14 @@
         enemyBullets.push(makeEnemyBullet(enemy.x, enemy.y, shotAngle, shotSpeed, kind));
       }
     };
-    if (enemy.type === "caster") {
+    if (enemy.type === "fencer") {
+      const y = enemy.y + 20;
+      const direction = enemy.aimedFence ? Math.atan2(player.y - y, player.x - enemy.x) :
+        Math.PI / 2 + Math.sin(enemy.seed + enemy.volley * .9) * .55;
+      const count = [11, 15, 19, 23][DIFFICULTY_ORDER[difficulty]];
+      scheduleBulletFence(enemy.x, y, direction, count, 165 + DIFFICULTY_ORDER[difficulty] * 14);
+      enemy.shot = (enemy.aimedFence ? 3.2 : 2.8) * settings.interval;
+    } else if (enemy.type === "caster") {
       // A slow radial ring creates a small bullet screen without flooding it.
       const count = adjustedBulletCount(4 + rank, 3);
       const bulletType = enemy.volley % 2 ? "orb" : "star";
@@ -700,6 +716,7 @@
 
     score += enemyBullets.length * 5;
     recycleAll(enemyBullets, pools.enemyBullets);
+    hazards = [];
     recycleAll(playerBullets, pools.playerBullets);
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
@@ -896,6 +913,85 @@
     enemyBullets.push(bullet);
   }
 
+  // A rapid stream of ordinary bullets traces one locked path from one origin.
+  // The bullets have identical velocity; only their launch times differ.
+  function scheduleBulletFence(x, y, direction, count, speed) {
+    const spacing = .075;
+    hazards.push({ type: "bulletFence", x1: x, y1: y,
+      x2: x + Math.cos(direction) * H, y2: y + Math.sin(direction) * H,
+      direction, count, speed, spacing, shotClock: 0, fired: 0,
+      warning: 1, life: 1 + count * spacing + .1 });
+  }
+
+  function scheduleStaticFence(x, y, angle, length = W * 1.12, width = 14) {
+    const dx = Math.cos(angle) * length / 2, dy = Math.sin(angle) * length / 2;
+    hazards.push({ type: "staticFence", x1: x - dx, y1: y - dy, x2: x + dx, y2: y + dy,
+      width, warning: 1, life: 2.65 });
+  }
+
+  function scheduleCircleFence(x, y, radius, width = 14) {
+    hazards.push({ type: "circleFence", x1: x, y1: y, radius, width,
+      warning: 1, life: 2.65 });
+  }
+
+  function scheduleBeam(x1, y1, x2, y2, width = 18) {
+    // Include the pre-light in the lock: never warn for a new laser until the
+    // previous laser has completely vanished.
+    if (hazards.some(hazard => hazard.type === "beam")) return false;
+    hazards.push({ type: "beam", x1, y1, x2, y2, width,
+      warning: 1, life: 2 });
+    return true;
+  }
+
+  function scheduleFixedBeam(laneX, width) {
+    return scheduleBeam(boss.x, boss.y, laneX, H, width);
+  }
+
+  function scheduleGrazeBeam(side, width) {
+    // Lock once near the player's current position, with a small dodge lane.
+    // The direction remains unchanged throughout warning and firing.
+    const targetX = player.x + side * (48 + width / 2);
+    const angle = Math.atan2(player.y - boss.y, targetX - boss.x);
+    const length = H * 1.4;
+    return scheduleBeam(boss.x, boss.y,
+      boss.x + Math.cos(angle) * length, boss.y + Math.sin(angle) * length, width);
+  }
+
+  function updateHazards(dt) {
+    for (const hazard of hazards) {
+      hazard.life -= dt;
+      hazard.warning = Math.max(0, hazard.warning - dt);
+      if (hazard.warning === 0 && !hazard.activated) {
+        hazard.activated = true;
+        playSound("enemyShot");
+      }
+      if (hazard.type === "bulletFence") {
+        if (hazard.warning === 0 && hazard.fired < hazard.count) {
+          hazard.shotClock -= dt;
+          while (hazard.shotClock <= 0 && hazard.fired < hazard.count) {
+            if (enemyBullets.length < difficultySettings().maxBullets) {
+              enemyBullets.push(makeEnemyBullet(hazard.x1, hazard.y1, hazard.direction, hazard.speed, "shard"));
+            }
+            hazard.fired++;
+            hazard.shotClock += hazard.spacing;
+          }
+        }
+        continue;
+      }
+      if (hazard.warning === 0 && hazard.life > 0 && player.invincible <= 0) {
+        if (hazard.type === "circleFence") {
+          if (Math.abs(Math.hypot(player.x - hazard.x1, player.y - hazard.y1) - hazard.radius) < hazard.width / 2 + player.r) hitPlayer();
+          continue;
+        }
+        const dx = hazard.x2 - hazard.x1, dy = hazard.y2 - hazard.y1;
+        const t = clamp(((player.x - hazard.x1) * dx + (player.y - hazard.y1) * dy) / (dx * dx + dy * dy), 0, 1);
+        if (Math.hypot(player.x - hazard.x1 - t * dx, player.y - hazard.y1 - t * dy) < hazard.width / 2 + player.r) hitPlayer();
+      }
+    }
+    compactInPlace(hazards, hazard => hazard.life > 0 &&
+      (hazard.type !== "bulletFence" || hazard.fired < hazard.count));
+  }
+
   function aimedAtPlayer() {
     return Math.atan2(player.y - boss.y, player.x - boss.x);
   }
@@ -924,9 +1020,72 @@
   const stageTwoVolleyDelay = base => base * difficultySettings().interval * (difficulty === "normal" ? 1.12 : 1);
   const stageTwoExtraLevel = () => DIFFICULTY_ORDER[difficulty];
 
+  function updateStageThreePattern() {
+    const rank = DIFFICULTY_ORDER[difficulty];
+    const interval = difficultySettings().interval;
+    const bossFence = (x, y, angle, width = 13) =>
+      scheduleStaticFence(x, y, angle, W * 1.14, width + rank * 2);
+    if (boss.cardIndex < 0) {
+      if (boss.patternClock > 0) return;
+      const volley = boss.volley++;
+      if (volley % 3 === 0) {
+        bossFence(W / 2, clamp(player.y - 100, 300, 540), .18 + Math.sin(volley * .8) * .5);
+      } else if (volley % 3 === 1) {
+        emitRandomComets(2 + rank, 220, 295);
+      } else {
+        const angle = aimedAtPlayer();
+        emitFan(angle, bossFanCount(5), .17, a => addBossBullet(a, 170, "bossMedium"));
+      }
+      boss.patternClock = .95 * interval;
+      return;
+    }
+    const pattern = activeCards[boss.cardIndex].pattern;
+    if (boss.patternClock <= 0) {
+      const volley = boss.volley++;
+      const aim = aimedAtPlayer();
+      if (pattern === "stormGate" || pattern === "portcullis") {
+        const y = clamp(player.y - 90 + Math.sin(volley * 1.8) * 65, 300, 570);
+        bossFence(W / 2, y, Math.sin(volley * .95) * .72, 15);
+        if (rank >= 2) bossFence(volley % 2 ? 110 : W - 110, y - 75, Math.PI / 2 + Math.sin(volley) * .32, 11);
+        boss.patternClock = 1.18 * interval;
+      } else if (pattern === "crossfire" || pattern === "cagedHorizon") {
+        const y = clamp(player.y - 105, 315, 555);
+        bossFence(W / 2, y, .55 + (volley % 2) * .22, 13);
+        bossFence(W / 2, y, Math.PI - .55 - (volley % 2) * .22, 13);
+        if (rank >= 2) scheduleFixedBeam(volley % 2 ? 90 : W - 90, 16 + rank * 3);
+        boss.patternClock = 1.3 * interval;
+      } else if (pattern === "verdict") {
+        if (volley % 2 === 0) scheduleFixedBeam([85, W / 2, W - 85][Math.floor(volley / 2) % 3], 20 + rank * 4);
+        else scheduleGrazeBeam(volley % 4 === 1 ? -1 : 1, 20 + rank * 4);
+        boss.patternClock = 1.45 * interval;
+      } else if (pattern === "ironHail") {
+        emitRandomComets(3 + rank, 245, 335);
+        if (volley % 2 === 0) bossFence(W / 2, clamp(player.y - 120, 300, 545), Math.sin(volley * .7) * .62, 14);
+        boss.patternClock = .75 * interval;
+      } else if (pattern === "judgment") {
+        const centerX = clamp(player.x + Math.sin(volley) * 70, 165, W - 165);
+        const centerY = clamp(player.y - 135, 220, 520);
+        scheduleCircleFence(centerX, centerY, 155, 15 + rank * 2);
+        if (volley % 2 === 0) scheduleFixedBeam(volley % 4 === 0 ? 100 : W - 100, 21 + rank * 3);
+        else scheduleGrazeBeam(volley % 4 === 1 ? 1 : -1, 21 + rank * 3);
+        if (rank >= 3) emitRandomComets(4, 245, 330);
+        boss.patternClock = 1.45 * interval;
+      }
+    }
+    if (boss.secondaryClock <= 0) {
+      if (rank >= 1) emitFan(aimedAtPlayer(), rank === 1 ? 3 : 3 + rank * 2, .16,
+        angle => addBossBullet(angle, 155 + rank * 8, "bossSmall"));
+      boss.secondaryClock = (rank >= 2 ? 1.25 : 1.9) * interval;
+    }
+  }
+
   function updateBossPattern(dt) {
     boss.patternClock -= dt;
     boss.secondaryClock -= dt;
+    if (stageIndex === 2) {
+      updateStageThreePattern();
+      return;
+    }
     if (boss.mode === "initial" && boss.cardIndex < 0) {
       if (boss.patternClock > 0) return;
       const settings = difficultySettings();
@@ -1133,6 +1292,7 @@
     stageEventIndex++;
     if (event.type === "formation") spawnSwarm(event.count, event.shape);
     else if (event.type === "mixed") spawnMixedGroup(event.count);
+    else if (event.type === "fenceEnemy") spawnFenceGroup(event.count, event.aimed);
     else if (event.type === "boss") startBoss(event.encounter);
   }
 
@@ -1324,6 +1484,7 @@
     for (const bullet of enemyBullets) burst(bullet.x, bullet.y, "#8ceaff", 2);
     score += enemyBullets.length * 5;
     recycleAll(enemyBullets, pools.enemyBullets);
+    hazards = [];
     beginCharacterBomb();
     burst(player.x, player.y, "#f5d681", 34);
     syncUI();
@@ -1343,6 +1504,7 @@
     shake = 12;
     burst(player.x, player.y, "#f04f64", 28);
     if (clearEnemyShots) recycleAll(enemyBullets, pools.enemyBullets);
+    hazards = [];
     recycleAll(playerBullets, pools.playerBullets);
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
@@ -1411,6 +1573,7 @@
 
     updateStage(dt);
     updateBoss(dt);
+    updateHazards(dt);
     updateCharacterBomb(dt);
 
     for (const b of playerBullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
@@ -1528,6 +1691,7 @@
     if (struckByBullet) {
       hitPlayer(false);
       recycleAll(enemyBullets, pools.enemyBullets);
+      hazards = [];
     } else {
       compactAndRecycle(enemyBullets, pools.enemyBullets, activeEnemyBullet);
       if (grazedThisFrame) {
@@ -1628,13 +1792,14 @@
   function drawBoss() {
     if (!boss) return;
     const isMizuki = stageIndex === 1;
+    const isRaika = stageIndex === 2;
     ctx.save(); ctx.translate(boss.x, boss.y);
     ctx.globalAlpha = boss.entering ? clamp((boss.y + 48) / 120, 0, 1) : 1;
     ctx.rotate(boss.age * .18);
-    ctx.strokeStyle = isMizuki ? "rgba(132, 238, 255, .46)" : "rgba(226, 190, 255, .38)"; ctx.lineWidth = 2;
+    ctx.strokeStyle = isRaika ? "rgba(255, 225, 125, .5)" : isMizuki ? "rgba(132, 238, 255, .46)" : "rgba(226, 190, 255, .38)"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(0, 0, 36 + Math.sin(boss.age * 2) * 3, 0, Math.PI * 2); ctx.stroke();
-    ctx.shadowColor = isMizuki ? "#55d7e8" : "#b36fe0"; ctx.shadowBlur = 22;
-    ctx.fillStyle = isMizuki ? "#247b91" : "#6f3f91"; ctx.beginPath();
+    ctx.shadowColor = isRaika ? "#ffd165" : isMizuki ? "#55d7e8" : "#b36fe0"; ctx.shadowBlur = 22;
+    ctx.fillStyle = isRaika ? "#9a6231" : isMizuki ? "#247b91" : "#6f3f91"; ctx.beginPath();
     for (let i = 0; i < 16; i++) {
       const angle = i * Math.PI / 8;
       const radius = i % 2 ? (isMizuki ? 15 : 19) : 29;
@@ -1642,7 +1807,7 @@
     }
     ctx.closePath(); ctx.fill();
     ctx.rotate(-boss.age * .36);
-    ctx.fillStyle = isMizuki ? "#f0b84d" : "#e95d82"; ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = isRaika ? "#f2dd77" : isMizuki ? "#f0b84d" : "#e95d82"; ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI * 2); ctx.fill();
     if (isMizuki) {
       ctx.strokeStyle = "#fff1ae"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -13); ctx.moveTo(0, 0); ctx.lineTo(10, 5); ctx.stroke();
@@ -1765,6 +1930,24 @@
     ctx.shadowBlur = 0; ctx.globalCompositeOperation = "source-over";
     for (const e of enemies) drawEnemy(e);
     drawBoss();
+    for (const hazard of hazards) {
+      if (hazard.type === "bulletFence" && hazard.warning === 0) continue;
+      ctx.save();
+      const warning = hazard.warning > 0;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = warning ? `rgba(255,255,255,${.52 + .38 * Math.sin((1 - hazard.warning) * 23) ** 2})` : "#ffcf68";
+      ctx.lineWidth = warning ? 2 : hazard.width;
+      ctx.shadowColor = warning ? "#ffffff" : "#ff704d";
+      ctx.shadowBlur = warning ? 7 : 18;
+      ctx.beginPath();
+      if (hazard.type === "circleFence") ctx.arc(hazard.x1, hazard.y1, hazard.radius, 0, Math.PI * 2);
+      else { ctx.moveTo(hazard.x1, hazard.y1); ctx.lineTo(hazard.x2, hazard.y2); }
+      ctx.stroke();
+      if (!warning) {
+        ctx.shadowBlur = 0; ctx.strokeStyle = "#fff8dd"; ctx.lineWidth = 3; ctx.stroke();
+      }
+      ctx.restore();
+    }
     for (const item of items) {
       const bob = Math.sin(item.age * 7) * 2;
       ctx.save(); ctx.translate(item.x, item.y + bob);
