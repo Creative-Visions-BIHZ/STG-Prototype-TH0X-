@@ -44,8 +44,11 @@ The title menu provides Story, Stage Practice, Spell Practice, and Records scree
 Story runs proceed through every stage normally. Stage Practice exposes every stage,
 starts the player at full power with infinite lives, records net lives lost, and ends
 after the selected stage. Spell Practice filters cards by the chosen difficulty and
-starts directly at the selected card. High score, run/clear totals, spell captures,
-recorded deaths, and the best practice loss are saved in browser local storage.
+starts directly at the selected card with no reserve lives or bombs; a death or other
+loss of the spell-card bonus ends the attempt. Per-stage high scores and player records
+are separated by difficulty and character. Legacy high scores are retained as Normal
+records. Run/clear totals, spell captures, recorded deaths, and the best practice loss
+are saved in browser local storage.
 
 ## GitHub Pages deployment
 
@@ -70,7 +73,7 @@ to target the organization Pages hostname.
 
 - **WASD / Arrow keys** — move
 - **Z / J** — shoot
-- **X** — use a bomb to clear bullets and damage enemies
+- **B / X** — use a bomb to clear bullets and damage enemies
 - **Shift** — focus (slower movement and visible hitbox)
 - **Escape** — pause
 
@@ -79,7 +82,7 @@ Touch controls appear automatically on narrow screens.
 ## Shot styles
 
 - **Type A — Reimu:** standard movement with large, tilted square amulets. Powered unfocused volleys spread into a widening V for broad coverage; holding Shift makes every lane parallel. Power tiers also add homing missiles.
-- **Type B — Marisa:** 50% faster movement, bullet speed, and firing rate with narrow full-damage shots. Her piercing laser is always a pair of side beams; holding Shift pulls them together at the center, while power increases their width, damage, and pulse rate.
+- **Type B — Marisa:** 50% faster movement, bullet speed, and firing rate with narrow full-damage shots. Her piercing laser is a widely spaced pair of continuous side beams while firing; holding Shift pulls them closer together, while power increases their width and damage.
 
 Both bomb cards immediately cancel hostile bullets, then diverge by character. Reimu's
 **Spirit Sign [Fantasy Seal]** launches a large, enduring Yin-Yang orb that homes between targets, repeatedly hits
@@ -88,6 +91,9 @@ valid target it curves away in a short departure arc and disappears instead of w
 Marisa's **Love Sign [Master Spark]** fires directly
 from her position: an extremely wide, high-damage laser that persists for several
 multi-hit pulses. Either bomb ends when a boss phase is cleared.
+
+Taking a hit starts a 0.3-second near-death window, shown by a glowing rim collapsing
+toward the player. Press B or X before it closes to spend a bomb and cancel the death.
 
 ## Difficulty and simulation
 
@@ -101,10 +107,10 @@ performs multiple simulation updates per rendered frame, so movement and firing 
 their intended rates. The optional **FPS-synced slowdown** setting instead performs one
 1/60-second update per rendered frame, intentionally slowing the game below 60 FPS.
 
-The optional **Practice** mode gives the player infinite lives while preserving the
+**Stage Practice** gives the player infinite lives while preserving the
 normal death penalties, recovery-item burst, and bomb reset. The HUD counts net lives
 lost as deaths minus life extends earned from point items (never displaying below zero).
-Practice scores are not saved as high scores.
+Cleared-stage scores are recorded separately for each stage, difficulty, and player.
 
 Marisa's power-scaled twin lasers provide piercing support damage; her ordinary focused
 fire remains the primary source of boss damage. Boss and spell-card HP are configured in

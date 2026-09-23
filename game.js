@@ -50,6 +50,14 @@
   const MAX_PLAYER_BULLETS = 96;
   const FIXED_STEP = 1 / 60;
   const MAX_SIMULATION_STEPS = 5;
+  const PLAYER_ATTACK_ALPHA = .38;
+  const BOMB_INVINCIBILITY_GRACE = .75;
+  const NEAR_DEATH_WINDOW = .3;
+  const ITEM_ATTRACTION_RADIUS = 60;
+  const ITEM_PICKUP_RADIUS = 13;
+  const ITEM_HOMING_SPEED = 400;
+  const ITEM_AUTO_COLLECT_SPEED = 650;
+  const ITEM_TERMINAL_SPEED = 140;
   const LIFE_POINT_STEP = 20000;
   const MIN_BOSS_POWER_DROP = 25;
   const STAGE_CLEAR_DURATION = 3.6;
@@ -87,6 +95,7 @@
   let difficulty = "normal";
   let frameSyncedSimulation = false;
   let practiceMode = false;
+  let spellPracticeMode = false;
   let runMode = "story";
   let selectedPracticeStage = 0;
   let selectedSpell = null;
@@ -116,14 +125,16 @@
   let stageResult = null;
   let stageSpellBonus = 0;
   let stageStartGraze = 0;
+  let stageStartScore = 0;
   let spellFailed = false;
   let bonusNotice = null;
   let bombWave = 0;
   let characterBomb = null;
+  let nearDeathTimer = 0;
   let shownRank = 1;
   let clearGeneration = 0;
   let shake = 0;
-  let highScore = Number(localStorage.getItem("starfall-high") || 0);
+  const legacyHighScore = Number(localStorage.getItem("starfall-high") || 0);
   const SAVE_KEY = "starfall-save-v2";
   let saveData;
   try {
@@ -131,7 +142,9 @@
   } catch {
     saveData = {};
   }
-  saveData = Object.assign({ runs: 0, clears: 0, practiceRuns: 0, spellCaptures: 0, deaths: 0, bestPracticeLoss: null }, saveData);
+  saveData = Object.assign({ runs: 0, clears: 0, practiceRuns: 0, spellCaptures: 0, deaths: 0, bestPracticeLoss: null, highScores: {}, profiles: {} }, saveData);
+  saveData.highScores ||= {};
+  saveData.profiles ||= {};
   let player;
   let boss = null;
   let enemies = [];
@@ -355,16 +368,43 @@
     localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
   }
 
+  function scoreRecordKey(stageNumber = stageIndex, selectedRank = difficulty, character = player?.character) {
+    return `stage${stageNumber + 1}:${selectedRank}:${character || "unknown"}`;
+  }
+
+  function profileRecordKey(selectedRank = difficulty, character = player?.character) {
+    return `${selectedRank}:${character || "unknown"}`;
+  }
+
+  function currentHighScore() {
+    return Number(saveData.highScores[scoreRecordKey()] || 0);
+  }
+
+  function recordStageHighScore() {
+    const key = scoreRecordKey();
+    const stageScore = Math.max(0, score - stageStartScore);
+    saveData.highScores[key] = Math.max(Number(saveData.highScores[key] || 0), stageScore);
+    persistSave();
+  }
+
   function recordRun(cleared) {
     if (runRecorded) return;
     runRecorded = true;
     saveData.runs++;
     saveData.deaths += practiceMode ? practiceDeaths : Math.max(0, 3 - lives);
+    const profileKey = profileRecordKey();
+    const profile = saveData.profiles[profileKey] ||= { runs: 0, clears: 0, practiceRuns: 0, spellCaptures: 0, deaths: 0 };
+    profile.runs++;
+    profile.deaths += practiceMode ? practiceDeaths : Math.max(0, 3 - lives);
     if (practiceMode) {
       saveData.practiceRuns++;
+      profile.practiceRuns++;
       const lost = Math.max(0, practiceDeaths - practiceLifeGains);
       if (saveData.bestPracticeLoss === null || lost < saveData.bestPracticeLoss) saveData.bestPracticeLoss = lost;
-    } else if (cleared) saveData.clears++;
+    } else if (cleared) {
+      saveData.clears++;
+      profile.clears++;
+    }
     persistSave();
   }
 
@@ -427,7 +467,7 @@
     ui.choices.classList.remove("hidden");
     ui.difficultyPanel.classList.remove("hidden");
     ui.simulationOption.classList.remove("hidden");
-    ui.kicker.textContent = mode === "story" ? "Main scenario" : mode === "stage" ? "Infinite lives · losses recorded" : "One spell · infinite retries";
+    ui.kicker.textContent = mode === "story" ? "Main scenario" : mode === "stage" ? "Infinite lives · losses recorded" : "One spell · one capture attempt";
     ui.title.textContent = mode === "story" ? "Select Player" : mode === "stage" ? "Stage Practice" : "Spell Practice";
     ui.copy.textContent = mode === "story" ? "Choose difficulty, simulation mode, and player." : "All stages are available. Choose a target, difficulty, and player.";
     renderPracticeSelector();
@@ -439,7 +479,20 @@
     ui.kicker.textContent = "Local save data";
     ui.title.textContent = "Records";
     ui.copy.textContent = "Progress is stored in this browser.";
-    ui.recordsPanel.innerHTML = `<div class="record-grid"><span>High score</span><b>${pad(highScore)}</b>` +
+    const scoreRows = Object.entries(saveData.highScores).sort().map(([key, value]) => {
+      const match = /^stage(\d+):(easy|normal|hard|lunatic):(reimu|marisa)$/.exec(key);
+      if (!match) return "";
+      return `<span>Stage ${match[1]} · ${DIFFICULTIES[match[2]].label} · ${SHIPS[match[3]].label.split(" · ")[1]}</span><b>${pad(value)}</b>`;
+    }).join("");
+    const profileRows = Object.entries(saveData.profiles).sort().map(([key, profile]) => {
+      const [rank, character] = key.split(":");
+      if (!DIFFICULTIES[rank] || !SHIPS[character]) return "";
+      return `<span>${DIFFICULTIES[rank].label} · ${SHIPS[character].label.split(" · ")[1]}</span>` +
+        `<b>${profile.runs} runs · ${profile.clears} clears · ${profile.spellCaptures || 0} captures · ${profile.deaths} deaths</b>`;
+    }).join("");
+    const legacyRow = legacyHighScore ? `<span>All stages · NORMAL · Legacy</span><b>${pad(legacyHighScore)}</b>` : "";
+    ui.recordsPanel.innerHTML = `<div class="record-grid">${legacyRow}${scoreRows || `<span>Stage high scores</span><b>—</b>`}` +
+      `${profileRows || `<span>Player records</span><b>—</b>`}` +
       `<span>Story clears</span><b>${saveData.clears}</b><span>Total runs</span><b>${saveData.runs}</b>` +
       `<span>Practice runs</span><b>${saveData.practiceRuns}</b><span>Spell captures</span><b>${saveData.spellCaptures}</b>` +
       `<span>Recorded deaths</span><b>${saveData.deaths}</b><span>Best practice loss</span><b>${saveData.bestPracticeLoss ?? "—"}</b></div>` +
@@ -450,32 +503,34 @@
   function launchConfiguredRun(character) {
     if (runMode === "story") resetGame(character, selectedDifficulty);
     else if (runMode === "stage") resetGame(character, selectedDifficulty, { practice: true, stageIndex: selectedPracticeStage });
-    else if (selectedSpell) resetGame(character, selectedDifficulty, { practice: true, stageIndex: selectedSpell.stageIndex, spell: selectedSpell.card });
+    else if (selectedSpell) resetGame(character, selectedDifficulty, { practice: true, spellPractice: true, stageIndex: selectedSpell.stageIndex, spell: selectedSpell.card });
   }
 
   function resetGame(character, chosenDifficulty = selectedDifficulty, options = {}) {
     unlockAudio();
     playSound("menu");
     runRecorded = false;
-    elapsed = stageTime = score = graze = shake = bombWave = 0;
+    elapsed = stageTime = score = stageStartScore = graze = shake = bombWave = nearDeathTimer = 0;
     stageIndex = options.stageIndex || 0;
     stageEventIndex = 0;
     boss = null;
     difficulty = chosenDifficulty;
     frameSyncedSimulation = ui.syncSimulation.checked;
     practiceMode = options.practice === true;
+    spellPracticeMode = options.spellPractice === true;
     simulationAccumulator = 0;
     ui.bossHud.classList.add("hidden");
-    lives = 3;
+    lives = spellPracticeMode ? 0 : 3;
     practiceDeaths = 0;
     practiceLifeGains = 0;
     power = 0;
     excessPower = 0;
-    bombs = 2;
-    if (practiceMode) {
+    bombs = spellPracticeMode ? 0 : 2;
+    if (practiceMode && !spellPracticeMode) {
       power = 100;
       bombs = 3;
     }
+    if (spellPracticeMode) power = 100;
     pointValue = 0;
     nextLifePointTarget = LIFE_POINT_STEP;
     stageClearTimer = 0;
@@ -505,16 +560,16 @@
 
   function syncUI() {
     ui.score.textContent = pad(score);
-    ui.high.textContent = pad(practiceMode ? highScore : Math.max(score, highScore));
-    ui.lives.textContent = practiceMode ? "∞" : lives > 0 ? Array(lives).fill("◆").join(" ") : "—";
-    ui.lives.setAttribute("aria-label", practiceMode ? "Infinite lives in practice mode" : `${lives} lives`);
-    ui.livesLost.textContent = practiceMode ? String(Math.max(0, practiceDeaths - practiceLifeGains)) : "—";
+    ui.high.textContent = pad(Math.max(score - stageStartScore, currentHighScore()));
+    ui.lives.textContent = spellPracticeMode ? "—" : practiceMode ? "∞" : lives > 0 ? Array(lives).fill("◆").join(" ") : "—";
+    ui.lives.setAttribute("aria-label", spellPracticeMode ? "No reserve lives in spell practice" : practiceMode ? "Infinite lives in practice mode" : `${lives} lives`);
+    ui.livesLost.textContent = spellPracticeMode ? "—" : practiceMode ? String(Math.max(0, practiceDeaths - practiceLifeGains)) : "—";
     ui.graze.textContent = String(graze).padStart(3, "0");
     ui.power.textContent = power >= 100 ? "P MAX" : `P ${(power / 25).toFixed(2)}`;
     ui.bombs.textContent = bombs > 0 ? Array(bombs).fill("●").join(" ") : "—";
     const bombCost = (bombs + 1) * 25;
-    ui.bombProgress.textContent = `P ${(excessPower / 25).toFixed(2)} / ${(bombCost / 25).toFixed(2)}`;
-    ui.lifePoints.textContent = `${pointValue} / ${nextLifePointTarget}`;
+    ui.bombProgress.textContent = spellPracticeMode ? "—" : `P ${(excessPower / 25).toFixed(2)} / ${(bombCost / 25).toFixed(2)}`;
+    ui.lifePoints.textContent = spellPracticeMode ? "—" : `${pointValue} / ${nextLifePointTarget}`;
     ui.rank.textContent = ["Ⅰ", "Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ"][difficultyRank()];
     ui.style.textContent = player ? SHIPS[player.character].label : "—";
     ui.difficulty.textContent = DIFFICULTIES[difficulty].label;
@@ -887,17 +942,20 @@
   }
 
   function awardSpellCardBonus(cardIndex) {
-    if (cardIndex < 0) return;
+    if (cardIndex < 0) return true;
     if (spellFailed) {
       bonusNotice = { title: "SPELL FAILED", detail: "Death or bomb used", life: 2.2, maxLife: 2.2, color: "#ef7588" };
-      return;
+      return false;
     }
     const bonus = spellCardBonus(cardIndex);
     score += bonus;
     stageSpellBonus += bonus;
     saveData.spellCaptures++;
+    const profile = saveData.profiles[profileRecordKey()] ||= { runs: 0, clears: 0, practiceRuns: 0, spellCaptures: 0, deaths: 0 };
+    profile.spellCaptures = (profile.spellCaptures || 0) + 1;
     persistSave();
     bonusNotice = { title: "SPELL CARD CAPTURED", detail: `+${pad(bonus)}`, life: 2.4, maxLife: 2.4, color: "#ffe090" };
+    return true;
   }
 
   function renderStageResult(progress, complete = false) {
@@ -920,6 +978,7 @@
     const clearBonus = Math.round(25000 * (stageIndex + 1) * difficultyMultiplier / 500) * 500;
     const totalBonus = stageSpellBonus + additionalBonus + clearBonus;
     score += additionalBonus + clearBonus;
+    recordStageHighScore();
     stageResult = { spellBonus: stageSpellBonus, additionalBonus, clearBonus, totalBonus, elapsed: 0 };
     stageClearTimer = STAGE_CLEAR_DURATION;
 
@@ -957,6 +1016,7 @@
       stageResult = null;
       stageSpellBonus = 0;
       stageStartGraze = graze;
+      stageStartScore = score;
       activeCards = [];
       player.x = W / 2;
       player.y = H - 90;
@@ -968,14 +1028,24 @@
     state = "stageclear";
     playSound("stageClear");
     recordRun(true);
-    if (!practiceMode) {
-      highScore = Math.max(highScore, score);
-      localStorage.setItem("starfall-high", highScore);
-    }
     ui.kicker.textContent = "The spellstorm is quiet";
     ui.title.textContent = "Stage clear";
     renderStageResult(1, true);
     ui.continueButton.classList.add("hidden");
+    ui.overlay.classList.remove("hidden");
+    showMainMenu(false);
+  }
+
+  function finishSpellPractice(captured) {
+    state = "stageclear";
+    recordRun(captured);
+    ui.kicker.textContent = captured ? "Spell captured" : "Capture conditions broken";
+    ui.title.textContent = captured ? "Practice clear" : "Spell failed";
+    ui.copy.innerHTML = captured
+      ? `Final score: ${pad(score)} · Graze: ${graze}`
+      : "A death or bomb forfeits the spell-card bonus.<br>Select a player to try again.";
+    ui.continueButton.classList.add("hidden");
+    ui.bossHud.classList.add("hidden");
     ui.overlay.classList.remove("hidden");
     showMainMenu(false);
   }
@@ -987,7 +1057,11 @@
     const clearedCardIndex = boss.cardIndex;
     playSound("phaseClear");
     score += defeatedMode === "initial" ? 5000 : 10000;
-    awardSpellCardBonus(clearedCardIndex);
+    const captured = awardSpellCardBonus(clearedCardIndex);
+    if (spellPracticeMode && !captured) {
+      finishSpellPractice(false);
+      return;
+    }
     if (defeatedMode === "initial" && clearedCardIndex < 0 && activeCards.length === 0) {
       boss.hp = 0;
       globalClear(false);
@@ -1525,14 +1599,15 @@
     }
   }
 
-  function emitMarisaLasers(tier, focused) {
-    playSound("special");
-    const offsets = focused ? [-3, 3] : [-13, 13];
+  function emitMarisaLasers(tier, focused, dt) {
+    const offsets = focused ? [-8, 8] : [-20, 20];
     const width = 3 + tier * .8;
-    const laserDamage = .055 + tier * .035;
+    const pulseDamage = .055 + tier * .035;
+    const oldPulseInterval = Math.max(.12, .25 - tier * .025);
+    const laserDamage = pulseDamage / oldPulseInterval * dt;
     for (const offset of offsets) {
       const x = player.x + offset;
-      lasers.push(Object.assign(takeFrom(pools.lasers), { x, y: player.y - 12, width, life: .14, maxLife: .14 }));
+      lasers.push(Object.assign(takeFrom(pools.lasers), { x, y: player.y - 12, width, life: 1, maxLife: 1 }));
       for (const enemy of enemies) {
         if (enemy.hp > 0 && enemy.y < player.y && Math.abs(enemy.x - x) < enemy.r + width) {
           enemy.hp -= laserDamage;
@@ -1556,11 +1631,11 @@
         orbitDirection: Math.random() < .5 ? -1 : 1, departTime: 0
       };
       bonusNotice = { title: "SPIRIT SIGN", detail: "Fantasy Seal", life: 1.7, maxLife: 1.7, color: "#ffb5c7" };
-      player.invincible = 3.7;
+      player.invincible = Math.max(player.invincible, BOMB_INVINCIBILITY_GRACE);
     } else {
       characterBomb = { type: "marisa", life: 2.25, maxLife: 2.25, tick: 0, width: 150 };
       bonusNotice = { title: "LOVE SIGN", detail: "Master Spark", life: 1.7, maxLife: 1.7, color: "#fff09a" };
-      player.invincible = 2.55;
+      player.invincible = Math.max(player.invincible, BOMB_INVINCIBILITY_GRACE);
     }
   }
 
@@ -1570,6 +1645,9 @@
     effect.life -= dt;
     effect.tick -= dt;
     effect.flash = Math.max(0, (effect.flash || 0) - dt);
+    // Refreshing this timer makes the whole strike safe and leaves a grace
+    // period after the effect ends, including when Fantasy Seal exits early.
+    player.invincible = Math.max(player.invincible, BOMB_INVINCIBILITY_GRACE);
     if (effect.life <= 0) {
       characterBomb = null;
       return;
@@ -1660,7 +1738,8 @@
   }
 
   function useBomb() {
-    if (state !== "playing" || stageResult || bombs <= 0 || bombWave > 0 || characterBomb) return;
+    if (state !== "playing" || spellPracticeMode || (stageResult && nearDeathTimer <= 0) || bombs <= 0 || bombWave > 0 || characterBomb) return;
+    nearDeathTimer = 0;
     if (boss && boss.cardIndex >= 0) spellFailed = true;
     bombs--;
     playSound("bomb");
@@ -1676,10 +1755,17 @@
     syncUI();
   }
 
-  function hitPlayer(clearEnemyShots = true) {
-    if (player.invincible > 0) return;
+  function hitPlayer() {
+    if (player.invincible > 0 || nearDeathTimer > 0) return;
     playSound("hit");
     if (boss && boss.cardIndex >= 0) spellFailed = true;
+    nearDeathTimer = NEAR_DEATH_WINDOW;
+    shake = Math.max(shake, 6);
+    burst(player.x, player.y, "#ffb3c0", 10);
+  }
+
+  function resolvePlayerDeath() {
+    nearDeathTimer = 0;
     if (practiceMode) practiceDeaths++;
     else lives--;
     const lostPower = Math.min(power, 25);
@@ -1689,14 +1775,18 @@
     bombs = 2;
     shake = 12;
     burst(player.x, player.y, "#f04f64", 28);
-    if (clearEnemyShots) recycleAll(enemyBullets, pools.enemyBullets);
+    recycleAll(enemyBullets, pools.enemyBullets);
     hazards = [];
     recycleAll(playerBullets, pools.playerBullets);
     recycleAll(missiles, pools.missiles);
     recycleAll(lasers, pools.lasers);
+    if (spellPracticeMode) {
+      finishSpellPractice(false);
+      syncUI();
+      return;
+    }
     if (!practiceMode && lives <= 0) {
-      highScore = Math.max(highScore, score);
-      localStorage.setItem("starfall-high", highScore);
+      recordStageHighScore();
       recordRun(false);
       state = "gameover";
       ui.kicker.textContent = "The spellstorm prevailed";
@@ -1730,6 +1820,13 @@
     player.x = clamp(player.x + dx * speed * dt, 15, W - 15);
     player.y = clamp(player.y + dy * speed * dt, 25, H - 20);
     player.invincible = Math.max(0, player.invincible - dt);
+    if (nearDeathTimer > 0) {
+      nearDeathTimer -= dt;
+      if (nearDeathTimer <= 0) {
+        resolvePlayerDeath();
+        if (state !== "playing") return;
+      }
+    }
     player.cooldown -= dt;
     player.specialCooldown -= dt;
     bombWave = Math.max(0, bombWave - dt);
@@ -1745,13 +1842,19 @@
       player.cooldown = ship.cooldown;
     }
 
-    if (firing && powerTier > 0 && player.specialCooldown <= 0) {
+    if (player.character === "marisa") recycleAll(lasers, pools.lasers);
+    if (firing && powerTier > 0) {
       if (player.character === "reimu") {
-        launchReimuMissiles(powerTier);
-        player.specialCooldown = Math.max(.28, .62 - powerTier * .08);
+        if (player.specialCooldown <= 0) {
+          launchReimuMissiles(powerTier);
+          player.specialCooldown = Math.max(.28, .62 - powerTier * .08);
+        }
       } else {
-        emitMarisaLasers(powerTier, focused);
-        player.specialCooldown = Math.max(.12, .25 - powerTier * .025);
+        emitMarisaLasers(powerTier, focused, dt);
+        if (player.specialCooldown <= 0) {
+          playSound("special");
+          player.specialCooldown = .2;
+        }
       }
     }
 
@@ -1873,7 +1976,7 @@
       }
     }
     if (struckByBullet) {
-      hitPlayer(false);
+      hitPlayer();
       recycleAll(enemyBullets, pools.enemyBullets);
       hazards = [];
     } else {
@@ -1889,21 +1992,21 @@
       const distance = Math.sqrt(dist2(item, player));
       if (item.autoCollect) {
         const angle = Math.atan2(player.y - item.y, player.x - item.x);
-        const step = Math.min(distance, 520 * dt);
+        const step = Math.min(distance, ITEM_AUTO_COLLECT_SPEED * dt);
         item.x += Math.cos(angle) * step;
         item.y += Math.sin(angle) * step;
       // Preserve the arcade-style pop before an ordinary item begins homing.
-      } else if (item.age > .38 && (distance < 105 || player.y < 115)) {
+      } else if (item.age > .38 && (distance < ITEM_ATTRACTION_RADIUS || player.y < 115)) {
         const angle = Math.atan2(player.y - item.y, player.x - item.x);
-        item.x += Math.cos(angle) * 270 * dt;
-        item.y += Math.sin(angle) * 270 * dt;
+        item.x += Math.cos(angle) * ITEM_HOMING_SPEED * dt;
+        item.y += Math.sin(angle) * ITEM_HOMING_SPEED * dt;
       } else {
-        item.vy = Math.min(92, item.vy + 210 * dt);
+        item.vy = Math.min(ITEM_TERMINAL_SPEED, item.vy + 260 * dt);
         item.x += item.vx * dt;
         item.y += item.vy * dt;
         item.vx *= Math.pow(.35, dt);
       }
-      if (Math.sqrt(dist2(item, player)) < 17 && item.age >= item.collectAfter) {
+      if (Math.sqrt(dist2(item, player)) < ITEM_PICKUP_RADIUS && item.age >= item.collectAfter) {
         collectItem(item, item.y);
         syncUI();
       }
@@ -1956,6 +2059,34 @@
     if (focused) {
       ctx.shadowBlur = 9; ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(0, 0, player.r, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = "rgba(240,199,105,.65)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawNearDeathEffect() {
+    if (nearDeathTimer <= 0) return;
+    const progress = 1 - nearDeathTimer / NEAR_DEATH_WINDOW;
+    const radius = 54 - progress * 42;
+    const alpha = .35 + progress * .65;
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.shadowColor = "#fff0a8";
+    ctx.shadowBlur = 18 + progress * 16;
+    ctx.strokeStyle = `rgba(255, 239, 166, ${alpha})`;
+    ctx.lineWidth = 2.5 + progress * 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 112, 137, ${alpha * .8})`;
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4 + progress * .45;
+      const outer = radius + 13;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+      ctx.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -2079,14 +2210,15 @@
     if (shake) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
     drawBackground(time);
     ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = PLAYER_ATTACK_ALPHA;
     for (const laser of lasers) {
       const alpha = laser.life / laser.maxLife;
       const beam = ctx.createLinearGradient(laser.x, laser.y, laser.x, 0);
       beam.addColorStop(0, `rgba(255, 220, 92, ${alpha})`);
       beam.addColorStop(1, `rgba(255, 171, 45, ${alpha * .16})`);
-      ctx.strokeStyle = beam; ctx.lineWidth = laser.width * 2.4; ctx.shadowColor = "#ffc64f"; ctx.shadowBlur = 14;
+      ctx.strokeStyle = beam; ctx.lineWidth = laser.width * 1.45; ctx.shadowColor = "#ffc64f"; ctx.shadowBlur = 8;
       ctx.beginPath(); ctx.moveTo(laser.x, laser.y); ctx.lineTo(laser.x, 0); ctx.stroke();
-      ctx.strokeStyle = `rgba(255, 244, 157, ${alpha})`; ctx.lineWidth = Math.max(1.5, laser.width * .55);
+      ctx.strokeStyle = `rgba(255, 244, 157, ${alpha})`; ctx.lineWidth = Math.max(1, laser.width * .34);
       ctx.beginPath(); ctx.moveTo(laser.x, laser.y); ctx.lineTo(laser.x, 0); ctx.stroke();
     }
     for (const b of playerBullets) {
@@ -2111,7 +2243,7 @@
       ctx.fillStyle = "#ef5365"; ctx.fillRect(-2, 3, 4, 5);
       ctx.restore();
     }
-    ctx.shadowBlur = 0; ctx.globalCompositeOperation = "source-over";
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over";
     for (const e of enemies) drawEnemy(e);
     drawBoss();
     for (const hazard of hazards) {
@@ -2232,6 +2364,7 @@
       ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.stroke();
     }
     if (player) drawPlayer(keys.has("ShiftLeft") || keys.has("ShiftRight"));
+    if (player) drawNearDeathEffect();
     ctx.fillStyle = "rgba(235,77,92,.7)"; ctx.fillRect(0, 0, 2, H);
     ctx.fillRect(W - 2, 0, 2, H);
     ctx.restore();
@@ -2274,8 +2407,8 @@
 
   addEventListener("keydown", e => {
     unlockAudio();
-    if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyZ", "KeyJ", "KeyX", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight", "Escape"].includes(e.code)) e.preventDefault();
-    if (e.code === "KeyX" && !e.repeat) useBomb();
+    if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyZ", "KeyJ", "KeyX", "KeyB", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight", "Escape"].includes(e.code)) e.preventDefault();
+    if ((e.code === "KeyX" || e.code === "KeyB") && !e.repeat) useBomb();
     else if (e.code === "Escape" && (state === "playing" || state === "paused")) {
       state = state === "playing" ? "paused" : "playing";
       playSound(state === "paused" ? "pause" : "menu");
